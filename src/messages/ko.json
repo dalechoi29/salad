@@ -1,0 +1,133 @@
+{
+  "common": {
+    "appName": "건강한 끼니",
+    "loading": "로딩 중...",
+    "save": "저장",
+    "cancel": "취소",
+    "confirm": "확인",
+    "delete": "삭제",
+    "edit": "수정",
+    "create": "생성",
+    "search": "검색",
+    "back": "뒤로",
+    "next": "다음",
+    "previous": "이전",
+    "yes": "예",
+    "no": "아니오",
+    "submit": "제출",
+    "close": "닫기"
+  },
+  "nav": {
+    "home": "홈",
+    "menu": "메뉴",
+    "pickup": "수령",
+    "mySalad": "내 샐러드",
+    "community": "대나무숲",
+    "myPage": "마이페이지",
+    "admin": "관리자"
+  },
+  "auth": {
+    "login": "로그인",
+    "signup": "회원가입",
+    "logout": "로그아웃",
+    "email": "이메일",
+    "password": "비밀번호",
+    "realName": "실명",
+    "nickname": "닉네임",
+    "loginTitle": "건강한 끼니 로그인",
+    "signupTitle": "회원가입",
+    "passwordPlaceholder": "4자리 비밀번호 입력",
+    "emailPlaceholder": "회사 이메일 입력",
+    "pendingApproval": "관리자 승인 대기 중입니다",
+    "invalidDomain": "허용된 이메일 도메인이 아닙니다",
+    "signupSuccess": "회원가입이 완료되었습니다. 관리자 승인을 기다려주세요."
+  },
+  "home": {
+    "welcome": "환영합니다, {name}님",
+    "pickupReminder": "오늘 샐러드 챙기셨나요?",
+    "todaysMenu": "오늘의 메뉴",
+    "nextDelivery": "다음 배달",
+    "pickupLocation": "수령 장소",
+    "noDeliveryToday": "오늘은 배달이 없습니다",
+    "streak": "{count}일 연속 수령"
+  },
+  "subscription": {
+    "title": "월간 구독",
+    "frequency": "주간 배달 횟수",
+    "saladsPerDelivery": "배달당 샐러드 수",
+    "paymentMethod": "결제 방법",
+    "creditCard": "신용카드",
+    "giftCertificate": "성남사랑상품권",
+    "bankTransfer": "계좌이체",
+    "applicationPeriod": "신청 기간",
+    "paymentPeriod": "결제 기간",
+    "status": "구독 상태",
+    "active": "활성",
+    "pending": "대기",
+    "expired": "만료",
+    "notSubscribed": "미구독",
+    "times": "{count}회"
+  },
+  "menu": {
+    "title": "메뉴 선택",
+    "selectMenu": "메뉴를 선택하세요",
+    "mainMenu": "메인 메뉴",
+    "optionalMenu": "선택 메뉴",
+    "deadline": "선택 마감",
+    "deadlineWarning": "금요일까지 선택해주세요",
+    "favorite": "즐겨찾기",
+    "favorites": "즐겨찾기 메뉴",
+    "matchesPreference": "식단 설정과 일치",
+    "reviews": "리뷰",
+    "noReviews": "아직 리뷰가 없습니다",
+    "rating": "평점"
+  },
+  "pickup": {
+    "title": "내 샐러드",
+    "confirmed": "수령 완료",
+    "notConfirmed": "미수령",
+    "confirmQuestion": "{day}에 샐러드 챙기셨나요?"
+  },
+  "review": {
+    "title": "리뷰 작성",
+    "rating": "평점",
+    "comment": "댓글",
+    "photo": "사진 추가",
+    "submitReview": "리뷰 제출",
+    "editReview": "리뷰 수정",
+    "deleteReview": "리뷰 삭제"
+  },
+  "community": {
+    "title": "대나무숲",
+    "newPost": "새 글 작성",
+    "writePost": "글쓰기",
+    "comments": "댓글",
+    "upvote": "추천",
+    "downvote": "비추천",
+    "noPost": "아직 게시글이 없습니다"
+  },
+  "myPage": {
+    "title": "마이페이지",
+    "accountSettings": "계정 설정",
+    "subscriptionOverview": "구독 현황",
+    "menuCalendar": "메뉴 캘린더",
+    "myReviews": "내 리뷰",
+    "myPosts": "내 게시글",
+    "dietaryPreferences": "식단 설정",
+    "notifications": "알림 설정",
+    "favoriteMenus": "즐겨찾기 메뉴"
+  },
+  "dietary": {
+    "vegan": "비건",
+    "glutenFree": "글루텐프리",
+    "nutFree": "견과류 없음",
+    "lowCarb": "저탄수화물",
+    "dairyFree": "유제품 없음",
+    "highProtein": "고단백"
+  },
+  "theme": {
+    "light": "라이트 모드",
+    "dark": "다크 모드",
+    "system": "시스템 설정"
+  }
+}

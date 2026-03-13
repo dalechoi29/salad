@@ -1,0 +1,133 @@
+{
+  "common": {
+    "appName": "Healthy Meal",
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "search": "Search",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "yes": "Yes",
+    "no": "No",
+    "submit": "Submit",
+    "close": "Close"
+  },
+  "nav": {
+    "home": "Home",
+    "menu": "Menu",
+    "pickup": "Pickup",
+    "mySalad": "My Salad",
+    "community": "Bamboo Forest",
+    "myPage": "My Page",
+    "admin": "Admin"
+  },
+  "auth": {
+    "login": "Login",
+    "signup": "Sign Up",
+    "logout": "Logout",
+    "email": "Email",
+    "password": "Password",
+    "realName": "Real Name",
+    "nickname": "Nickname",
+    "loginTitle": "Healthy Meal Login",
+    "signupTitle": "Sign Up",
+    "passwordPlaceholder": "Enter 4-digit password",
+    "emailPlaceholder": "Enter corporate email",
+    "pendingApproval": "Waiting for admin approval",
+    "invalidDomain": "Email domain is not allowed",
+    "signupSuccess": "Sign up complete. Please wait for admin approval."
+  },
+  "home": {
+    "welcome": "Welcome, {name}",
+    "pickupReminder": "Did you pick up your salad?",
+    "todaysMenu": "Today's Menu",
+    "nextDelivery": "Next Delivery",
+    "pickupLocation": "Pickup Location",
+    "noDeliveryToday": "No delivery today",
+    "streak": "{count}-day pickup streak"
+  },
+  "subscription": {
+    "title": "Monthly Subscription",
+    "frequency": "Deliveries per Week",
+    "saladsPerDelivery": "Salads per Delivery",
+    "paymentMethod": "Payment Method",
+    "creditCard": "Credit Card",
+    "giftCertificate": "Seongnam Sarang Gift Certificate",
+    "bankTransfer": "Bank Transfer",
+    "applicationPeriod": "Application Period",
+    "paymentPeriod": "Payment Period",
+    "status": "Subscription Status",
+    "active": "Active",
+    "pending": "Pending",
+    "expired": "Expired",
+    "notSubscribed": "Not Subscribed",
+    "times": "{count} times"
+  },
+  "menu": {
+    "title": "Menu Selection",
+    "selectMenu": "Select your menu",
+    "mainMenu": "Main Menu",
+    "optionalMenu": "Optional Menu",
+    "deadline": "Selection Deadline",
+    "deadlineWarning": "Please select by Friday",
+    "favorite": "Favorite",
+    "favorites": "Favorite Menus",
+    "matchesPreference": "Matches your dietary preferences",
+    "reviews": "Reviews",
+    "noReviews": "No reviews yet",
+    "rating": "Rating"
+  },
+  "pickup": {
+    "title": "Pickup Confirmation",
+    "confirmed": "Picked Up",
+    "notConfirmed": "Not Picked Up",
+    "confirmQuestion": "Did you pick up your salad on {day}?"
+  },
+  "review": {
+    "title": "Write Review",
+    "rating": "Rating",
+    "comment": "Comment",
+    "photo": "Add Photo",
+    "submitReview": "Submit Review",
+    "editReview": "Edit Review",
+    "deleteReview": "Delete Review"
+  },
+  "community": {
+    "title": "Bamboo Forest",
+    "newPost": "New Post",
+    "writePost": "Write Post",
+    "comments": "Comments",
+    "upvote": "Upvote",
+    "downvote": "Downvote",
+    "noPost": "No posts yet"
+  },
+  "myPage": {
+    "title": "My Page",
+    "accountSettings": "Account Settings",
+    "subscriptionOverview": "Subscription Overview",
+    "menuCalendar": "Menu Calendar",
+    "myReviews": "My Reviews",
+    "myPosts": "My Posts",
+    "dietaryPreferences": "Dietary Preferences",
+    "notifications": "Notifications",
+    "favoriteMenus": "Favorite Menus"
+  },
+  "dietary": {
+    "vegan": "Vegan",
+    "glutenFree": "Gluten-Free",
+    "nutFree": "Nut-Free",
+    "lowCarb": "Low-Carb",
+    "dairyFree": "Dairy-Free",
+    "highProtein": "High-Protein"
+  },
+  "theme": {
+    "light": "Light Mode",
+    "dark": "Dark Mode",
+    "system": "System"
+  }
+}
