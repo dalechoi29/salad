@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import {
   getActivePeriod,
@@ -23,8 +24,13 @@ export interface SubscriptionWithDetails {
 }
 
 export default async function MyPage() {
-  const [profile, period, allSubscriptions] = await Promise.all([
-    getCurrentProfile(),
+  const profile = await getCurrentProfile();
+
+  if (!profile) {
+    redirect("/signup");
+  }
+
+  const [period, allSubscriptions] = await Promise.all([
     getActivePeriod(),
     getMySubscriptions(),
   ]);

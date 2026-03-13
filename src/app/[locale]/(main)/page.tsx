@@ -1,6 +1,7 @@
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Salad,
   CalendarCheck,
@@ -8,6 +9,7 @@ import {
   UtensilsCrossed,
   Check,
   Clock,
+  LogIn,
 } from "lucide-react";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import {
@@ -97,7 +99,8 @@ export default async function HomePage() {
 
   return (
     <HomeContent
-      nickname={profile?.nickname ?? "User"}
+      isLoggedIn={!!profile}
+      nickname={profile?.nickname ?? ""}
       period={period}
       subscription={subscription}
       periodSubscription={periodSubscription}
@@ -125,6 +128,7 @@ const DIETARY_LABELS: Record<string, string> = {
 };
 
 function HomeContent({
+  isLoggedIn,
   nickname,
   period,
   subscription,
@@ -140,6 +144,7 @@ function HomeContent({
   nextDeliverySelection,
   todaySelectedMenuName,
 }: {
+  isLoggedIn: boolean;
   nickname: string;
   period: any;
   subscription: any;
@@ -188,7 +193,7 @@ function HomeContent({
   }
 
   const subscriptionCard = (
-    <Link href="/subscription" className="block">
+    <Link href={isLoggedIn ? "/subscription" : "/signup"} className="block">
       <Card className={`transition-colors hover:bg-accent/50 ${isActionablePeriod && !isPeriodPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
         <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
@@ -245,25 +250,36 @@ function HomeContent({
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="flex items-start justify-between">
         <h1 className="text-2xl font-bold tracking-tight">
-          {t("welcome", { name: nickname })}
+          {isLoggedIn ? t("welcome", { name: nickname }) : "로그인이 필요해요"}
         </h1>
-        <div className="flex items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1 dark:bg-orange-900/20">
-          <Flame className="h-4 w-4 text-orange-500" />
-          <span className="text-sm font-medium text-orange-600 dark:text-orange-400">
-            {streak}일 연속 수령
-          </span>
-        </div>
+        {isLoggedIn ? (
+          <div className="flex items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1 dark:bg-orange-900/20">
+            <Flame className="h-4 w-4 text-orange-500" />
+            <span className="text-sm font-medium text-orange-600 dark:text-orange-400">
+              {streak}일 연속 수령
+            </span>
+          </div>
+        ) : (
+          <Link href="/login">
+            <Button size="sm" className="gap-1.5">
+              <LogIn className="h-4 w-4" />
+              로그인
+            </Button>
+          </Link>
+        )}
       </div>
 
       {/* Show subscription card at top during application/payment period */}
       {isActionablePeriod && !isPeriodPaid && subscriptionCard}
 
-      <HomePickupCard
-        todayStr={todayStr}
-        initialConfirmed={todayConfirmed}
-        hasDeliveryToday={isMyDeliveryDay && todayMenus.length > 0}
-        todayMenuName={todaySelectedMenuName}
-      />
+      {isLoggedIn && (
+        <HomePickupCard
+          todayStr={todayStr}
+          initialConfirmed={todayConfirmed}
+          hasDeliveryToday={isMyDeliveryDay && todayMenus.length > 0}
+          todayMenuName={todaySelectedMenuName}
+        />
+      )}
 
       <div className="space-y-3 pt-2">
         <div className="flex items-center justify-between">
@@ -271,7 +287,7 @@ function HomeContent({
             <Salad className="h-5 w-5 text-primary" />
             <h2 className="text-base font-semibold">{t("todaysMenu")}</h2>
           </div>
-          {todayMenus.length > 0 && (
+          {isLoggedIn && todayMenus.length > 0 && (
             <span className={`rounded-full px-3 py-1 text-sm font-medium ${isMyDeliveryDay ? "bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
               {isMyDeliveryDay
                 ? "구독날이니 든든하게 챙겨먹어요 🥗"
@@ -328,44 +344,46 @@ function HomeContent({
         )}
       </div>
 
-      <Link href="/menu" className="block">
-        <Card className="transition-colors hover:bg-accent/50">
-          <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
-              <CalendarCheck className="h-5 w-5 text-blue-500" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <CardTitle className="text-base">
-                {nextDeliveryDate
-                  ? `${formatDateFull(nextDeliveryDate)}에 다음 배달이 와요`
-                  : t("nextDelivery")}
-              </CardTitle>
-              {nextDeliveryDate ? (
-                <div className="text-sm text-muted-foreground">
-                  {nextDeliverySelection ? (
-                    <p className="font-medium text-foreground">
-                      ✓ {(nextDeliverySelection.daily_menu_assignment as any)?.menu?.title ?? "메뉴"}
-                    </p>
-                  ) : nextDeliveryMenus.length > 0 ? (
-                    <p>
-                      {nextDeliveryMenus
-                        .map((dm) => dm.menu?.title)
-                        .filter(Boolean)
-                        .join(", ")}
-                    </p>
-                  ) : (
-                    <p>메뉴 미배정</p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  예정된 배달이 없습니다
-                </p>
-              )}
-            </div>
-          </CardHeader>
-        </Card>
-      </Link>
+      {isLoggedIn && (
+        <Link href="/menu" className="block">
+          <Card className="transition-colors hover:bg-accent/50">
+            <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
+                <CalendarCheck className="h-5 w-5 text-blue-500" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <CardTitle className="text-base">
+                  {nextDeliveryDate
+                    ? `${formatDateFull(nextDeliveryDate)}에 다음 배달이 와요`
+                    : t("nextDelivery")}
+                </CardTitle>
+                {nextDeliveryDate ? (
+                  <div className="text-sm text-muted-foreground">
+                    {nextDeliverySelection ? (
+                      <p className="font-medium text-foreground">
+                        ✓ {(nextDeliverySelection.daily_menu_assignment as any)?.menu?.title ?? "메뉴"}
+                      </p>
+                    ) : nextDeliveryMenus.length > 0 ? (
+                      <p>
+                        {nextDeliveryMenus
+                          .map((dm) => dm.menu?.title)
+                          .filter(Boolean)
+                          .join(", ")}
+                      </p>
+                    ) : (
+                      <p>메뉴 미배정</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    예정된 배달이 없습니다
+                  </p>
+                )}
+              </div>
+            </CardHeader>
+          </Card>
+        </Link>
+      )}
 
       {/* Show subscription card at bottom if not in actionable period or already paid */}
       {(!isActionablePeriod || isPeriodPaid) && subscriptionCard}

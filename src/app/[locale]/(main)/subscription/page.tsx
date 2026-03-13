@@ -1,9 +1,11 @@
+import { redirect } from "next/navigation";
 import {
   getActivePeriod,
   getMySubscription,
   getMyLastPaymentMethod,
   getSubscriptionPeriodById,
 } from "@/lib/actions/subscription";
+import { getCurrentProfile } from "@/lib/actions/auth";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { deliveryDaysToDateStrings } from "@/lib/utils";
@@ -14,6 +16,11 @@ export default async function SubscriptionPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
+  const profile = await getCurrentProfile();
+  if (!profile) {
+    redirect("/signup");
+  }
+
   const params = await searchParams;
   const periodIdParam = params.period;
 
