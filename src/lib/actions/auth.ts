@@ -1,7 +1,6 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
 
 export type AuthResult = {
   error?: string;
@@ -134,7 +133,6 @@ export async function login(formData: FormData): Promise<AuthResult> {
 export async function logout() {
   const supabase = await createClient();
   await supabase.auth.signOut();
-  redirect("/login");
 }
 
 export async function updateNickname(nickname: string): Promise<AuthResult> {

@@ -38,7 +38,7 @@ import {
   ChevronUp,
   Archive,
 } from "lucide-react";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { updateNickname, logout } from "@/lib/actions/auth";
@@ -138,6 +138,7 @@ export function MyPageContent({
   initialPosts,
 }: MyPageContentProps) {
   const t = useTranslations("myPage");
+  const router = useRouter();
 
   const [favorites, setFavorites] = useState(initialFavorites);
   const [reviews, setReviews] = useState(initialReviews);
@@ -205,6 +206,7 @@ export function MyPageContent({
   async function handleLogout() {
     setIsLoggingOut(true);
     await logout();
+    router.replace("/login");
   }
 
   return (
@@ -529,7 +531,7 @@ export function MyPageContent({
       {/* Logout */}
       <Button
         variant="outline"
-        className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+        className="h-12 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={handleLogout}
         disabled={isLoggingOut}
       >

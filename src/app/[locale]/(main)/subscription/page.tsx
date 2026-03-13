@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getLocale } from "next-intl/server";
 import {
   getActivePeriod,
   getMySubscription,
@@ -18,7 +19,8 @@ export default async function SubscriptionPage({
 }) {
   const profile = await getCurrentProfile();
   if (!profile) {
-    redirect("/signup");
+    const locale = await getLocale();
+    redirect(`/${locale}/signup`);
   }
 
   const params = await searchParams;

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getLocale } from "next-intl/server";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import {
   getActivePeriod,
@@ -27,7 +28,8 @@ export default async function MyPage() {
   const profile = await getCurrentProfile();
 
   if (!profile) {
-    redirect("/signup");
+    const locale = await getLocale();
+    redirect(`/${locale}/signup`);
   }
 
   const [period, allSubscriptions] = await Promise.all([

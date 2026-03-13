@@ -2,6 +2,7 @@
 
 import { Sprout, LogOut } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "@/i18n/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { LanguageToggle } from "@/components/layout/language-toggle";
 import { useUser } from "@/components/providers/user-provider";
@@ -12,6 +13,12 @@ export function Header() {
   const t = useTranslations("common");
   const tAuth = useTranslations("auth");
   const { user } = useUser();
+  const router = useRouter();
+
+  async function handleLogout() {
+    await logout();
+    router.replace("/login");
+  }
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -25,12 +32,10 @@ export function Header() {
           <LanguageToggle />
           <ThemeToggle />
           {user && (
-            <form action={logout}>
-              <Button variant="ghost" size="icon" className="h-9 w-9">
-                <LogOut className="h-4 w-4" />
-                <span className="sr-only">{tAuth("logout")}</span>
-              </Button>
-            </form>
+            <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleLogout}>
+              <LogOut className="h-4 w-4" />
+              <span className="sr-only">{tAuth("logout")}</span>
+            </Button>
           )}
         </div>
       </div>
