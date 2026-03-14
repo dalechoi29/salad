@@ -25,6 +25,7 @@ import {
 import { bulkSaveDeliveryDays } from "@/lib/actions/delivery";
 import { toast } from "sonner";
 import {
+  ArrowLeft,
   CalendarRange,
   CreditCard,
   Loader2,
@@ -42,6 +43,12 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -916,9 +923,9 @@ function SubscriptionStatus({
   }
 
   const [isCancelling, setIsCancelling] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
 
   async function handleCancelSubscription() {
-    if (!confirm("구독 신청을 취소하시겠습니까?")) return;
     setIsCancelling(true);
     try {
       const result = await cancelSubscription(subscription.id);
@@ -927,7 +934,9 @@ function SubscriptionStatus({
         return;
       }
       toast.success("구독 신청이 취소되었습니다");
+      setShowCancelDialog(false);
       router.push("/subscription");
+      router.refresh();
     } finally {
       setIsCancelling(false);
     }
@@ -936,7 +945,12 @@ function SubscriptionStatus({
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">구독 현황</h1>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.back()}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-2xl font-bold tracking-tight">구독 현황</h1>
+        </div>
         {canEdit && !isEditing && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -949,8 +963,7 @@ function SubscriptionStatus({
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
-                onClick={handleCancelSubscription}
-                disabled={isCancelling}
+                onClick={() => setShowCancelDialog(true)}
               >
                 신청 취소
               </DropdownMenuItem>
@@ -1301,6 +1314,36 @@ function SubscriptionStatus({
           </Button>
         </Link>
       )}
+
+      <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>구독 신청 취소</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            구독 신청을 취소하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+          </p>
+          <div className="flex gap-2 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setShowCancelDialog(false)}
+              disabled={isCancelling}
+            >
+              아니요
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1"
+              onClick={handleCancelSubscription}
+              disabled={isCancelling}
+            >
+              {isCancelling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              취소하기
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -190,7 +190,22 @@ export function MenuSelectionView({
         return;
       }
       toast.success("메뉴가 선택되었습니다");
-      await loadData();
+
+      const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
+      setSelections((prev) => {
+        const filtered = prev.filter((s) => s.delivery_date !== dateStr);
+        return [
+          ...filtered,
+          {
+            id: `temp-${Date.now()}`,
+            user_id: "",
+            daily_menu_id: dailyMenuId,
+            delivery_date: dateStr,
+            daily_menu_assignment: matchingMenu ?? null,
+            created_at: new Date().toISOString(),
+          } as MenuSelection,
+        ];
+      });
     } finally {
       setSelectingDate(null);
     }

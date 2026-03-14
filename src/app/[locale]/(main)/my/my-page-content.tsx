@@ -531,7 +531,7 @@ export function MyPageContent({
       {/* Logout */}
       <Button
         variant="outline"
-        className="h-12 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+        className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={handleLogout}
         disabled={isLoggingOut}
       >

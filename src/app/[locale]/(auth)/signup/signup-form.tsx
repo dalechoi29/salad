@@ -6,11 +6,10 @@ import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { signup } from "@/lib/actions/auth";
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
-import { Loader2, CheckCircle2 } from "lucide-react";
+import { Loader2, CheckCircle2, Sprout } from "lucide-react";
 
 export function SignupForm() {
   const t = useTranslations("auth");
@@ -47,8 +46,15 @@ export function SignupForm() {
 
   if (isSuccess) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center gap-4 pt-8 pb-8">
+      <div className="space-y-8">
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-2">
+          <Sprout className="h-6 w-6 text-primary" />
+          <span className="text-lg font-semibold">{t("loginTitle")}</span>
+        </div>
+      </div>
+
+        <div className="flex flex-col items-center gap-4 py-8">
           <CheckCircle2 className="h-12 w-12 text-green-500" />
           <div className="space-y-2 text-center">
             <p className="font-medium">{t("signupSuccess")}</p>
@@ -56,21 +62,25 @@ export function SignupForm() {
               {t("pendingApproval")}
             </p>
           </div>
-          <Link
-            href="/login"
-            className="mt-2 inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted"
-          >
-            {t("login")}
+          <Link href="/login">
+            <Button variant="outline">{t("login")}</Button>
           </Link>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Card>
-      <form action={handleSubmit}>
-        <CardContent className="space-y-4 pt-6">
+    <div className="space-y-8">
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-2">
+          <Sprout className="h-6 w-6 text-primary" />
+          <span className="text-lg font-semibold">{t("signupTitle")}</span>
+        </div>
+      </div>
+
+      <form action={handleSubmit} className="space-y-6">
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">{t("email")}</Label>
             <Input
@@ -105,8 +115,9 @@ export function SignupForm() {
               autoComplete="username"
             />
           </div>
-        </CardContent>
-        <CardFooter className="flex flex-col gap-3">
+        </div>
+
+        <div className="space-y-3">
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t("signup")}
@@ -119,8 +130,8 @@ export function SignupForm() {
               {t("login")}
             </Link>
           </p>
-        </CardFooter>
+        </div>
       </form>
-    </Card>
+    </div>
   );
 }

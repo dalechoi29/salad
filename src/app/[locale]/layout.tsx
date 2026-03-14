@@ -5,6 +5,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/providers/theme-provider";
+import { RouteProgress } from "@/components/layout/route-progress";
 import { routing } from "@/i18n/routing";
 
 const geistSans = Geist({
@@ -45,6 +46,7 @@ export default async function LocaleLayout({
         >
           <NextIntlClientProvider messages={messages}>
             <TooltipProvider>
+              <RouteProgress />
               {children}
               <Toaster richColors position="top-center" />
             </TooltipProvider>

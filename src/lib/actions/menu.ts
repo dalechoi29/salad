@@ -234,7 +234,6 @@ export async function selectMenu(
     if (error) return { error: error.message };
   }
 
-  revalidatePath("/menu");
   return { success: true };
 }
 

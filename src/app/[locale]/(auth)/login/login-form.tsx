@@ -6,15 +6,10 @@ import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-} from "@/components/ui/card";
 import { login } from "@/lib/actions/auth";
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sprout } from "lucide-react";
 
 export function LoginForm() {
   const t = useTranslations("auth");
@@ -54,7 +49,7 @@ export function LoginForm() {
       }
 
       localStorage.removeItem("salad_pending_email");
-      toast.success("Login successful");
+      toast.success("환영해요! 건강한 끼니에요");
       router.push("/");
       router.refresh();
     } finally {
@@ -63,9 +58,16 @@ export function LoginForm() {
   }
 
   return (
-    <Card>
-      <form action={handleSubmit}>
-        <CardContent className="space-y-4 pt-6">
+    <div className="space-y-8">
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-2">
+          <Sprout className="h-6 w-6 text-primary" />
+          <span className="text-lg font-semibold">{t("loginTitle")}</span>
+        </div>
+      </div>
+
+      <form action={handleSubmit} className="space-y-6">
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">{t("email")}</Label>
             <Input
@@ -92,8 +94,9 @@ export function LoginForm() {
               autoComplete="current-password"
             />
           </div>
-        </CardContent>
-        <CardFooter className="flex flex-col gap-3">
+        </div>
+
+        <div className="space-y-3">
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t("login")}
@@ -106,8 +109,8 @@ export function LoginForm() {
               {t("signup")}
             </Link>
           </p>
-        </CardFooter>
+        </div>
       </form>
-    </Card>
+    </div>
   );
 }
