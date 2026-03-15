@@ -8,7 +8,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +22,7 @@ import {
   CalendarCheck,
   Loader2,
 } from "lucide-react";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { getSubscribersForDate } from "@/lib/actions/admin";
 import type { SubscriptionPeriod, Holiday } from "@/types";
 
@@ -35,7 +34,7 @@ interface Props {
   holidays: Holiday[];
   showBackButton?: boolean;
   showTitle?: boolean;
-  isAdmin?: boolean;
+  isLoggedIn?: boolean;
 }
 
 const DAY_LABELS = ["월", "화", "수", "목", "금"];
@@ -96,20 +95,21 @@ function MonthCalendar({
   period,
   counts,
   holidays,
-  isAdmin = false,
+  isLoggedIn = true,
 }: {
   period: SubscriptionPeriod;
   counts: Record<string, number>;
   holidays: Holiday[];
-  isAdmin?: boolean;
+  isLoggedIn?: boolean;
 }) {
+  const router = useRouter();
   const [currentMonday, setCurrentMonday] = useState(() =>
     getInitialMonday(period)
   );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogDate, setDialogDate] = useState("");
   const [dialogUsers, setDialogUsers] = useState<
-    { userId: string; realName: string }[]
+    { userId: string; realName: string; saladsPerDelivery: number }[]
   >([]);
   const [dialogLoading, setDialogLoading] = useState(false);
 
@@ -160,6 +160,10 @@ function MonthCalendar({
 
   async function handleDateClick(dateStr: string, count: number) {
     if (count === 0) return;
+    if (!isLoggedIn) {
+      router.push("/login");
+      return;
+    }
     setDialogDate(dateStr);
     setDialogOpen(true);
     setDialogLoading(true);
@@ -242,7 +246,7 @@ function MonthCalendar({
               const hName = holidayMap.get(dateStr);
               const outOfRange = isOutOfRange(i);
               const isToday = dateStr === todayStr;
-              const clickable = isAdmin && count > 0 && !isHoliday && !outOfRange;
+              const clickable = count > 0 && !isHoliday && !outOfRange;
 
               return (
                 <button
@@ -260,9 +264,9 @@ function MonthCalendar({
                           : "border-muted bg-background"
                   } ${clickable ? "cursor-pointer hover:border-primary/50 hover:bg-primary/5" : ""}`}
                 >
-                  <span className="text-sm font-medium">{label}</span>
+                  <span className="text-[11px] text-muted-foreground">{label}</span>
                   <span
-                    className={`text-lg font-semibold ${isToday ? "text-primary" : ""}`}
+                    className={`text-sm ${isToday ? "font-semibold text-primary" : "text-muted-foreground"}`}
                   >
                     {dateNum}
                   </span>
@@ -274,13 +278,13 @@ function MonthCalendar({
                     <span className="h-5" />
                   ) : (
                     <span
-                      className={`flex items-center gap-0.5 text-sm font-medium ${
+                      className={`flex items-center gap-1 text-lg font-bold ${
                         count > 0
                           ? "text-primary"
-                          : "text-muted-foreground"
+                          : "text-muted-foreground/50"
                       }`}
                     >
-                      <Users className="h-3 w-3" />
+                      <Users className="h-4 w-4" />
                       {count}
                     </span>
                   )}
@@ -316,17 +320,22 @@ function MonthCalendar({
                   key={u.userId}
                   className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50"
                 >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
                     {idx + 1}
                   </div>
-                  <span className="text-sm font-medium">{u.realName}</span>
+                  <span className="flex-1 text-sm font-medium">{u.realName}</span>
+                  <span className="text-sm text-muted-foreground">
+                    {u.saladsPerDelivery}개
+                  </span>
                 </div>
               ))}
             </div>
           )}
-          <p className="text-center text-sm text-muted-foreground">
-            총 {dialogUsers.length}명
-          </p>
+          <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground">
+            <span>총 {dialogUsers.length}명</span>
+            <span>·</span>
+            <span>샐러드 총 {dialogUsers.reduce((sum, u) => sum + u.saladsPerDelivery, 0)}개</span>
+          </div>
         </DialogContent>
       </Dialog>
     </>
@@ -341,7 +350,7 @@ export function SubscriptionStatusView({
   holidays,
   showBackButton = true,
   showTitle = false,
-  isAdmin = false,
+  isLoggedIn = true,
 }: Props) {
   const tabs = useMemo(() => {
     const t: { label: string; period: SubscriptionPeriod | null; counts: Record<string, number> }[] = [];
@@ -420,7 +429,7 @@ export function SubscriptionStatusView({
               period={active.period}
               counts={active.counts}
               holidays={holidays}
-              isAdmin={isAdmin}
+              isLoggedIn={isLoggedIn}
             />
           )}
 

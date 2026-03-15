@@ -1,6 +1,7 @@
 import { getMySubscriptions } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
-import { deliveryDaysToDateStrings, formatDateISO } from "@/lib/utils";
+import { getMenuSelectionCutoff } from "@/lib/actions/admin";
+import { deliveryDaysToDateStrings, formatDateISO, getKSTDate } from "@/lib/utils";
 import { MenuSelectionView } from "./menu-selection-view";
 import type { Subscription, SubscriptionPeriod } from "@/types";
 
@@ -25,7 +26,7 @@ function findSubscriptionForMonth(
 export default async function MenuPage() {
   const allSubscriptions = await getMySubscriptions();
 
-  const today = new Date();
+  const today = getKSTDate();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
   const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
@@ -36,10 +37,13 @@ export default async function MenuPage() {
   const subscription = findSubscriptionForMonth(allSubscriptions, rangeStart, rangeEnd);
 
   let myDeliveryDates: string[] = [];
+  const saladsPerDelivery = subscription?.salads_per_delivery ?? 1;
   if (subscription) {
     const days = await getMyDeliveryDays(subscription.id);
     myDeliveryDates = deliveryDaysToDateStrings(days);
   }
+
+  const cutoff = await getMenuSelectionCutoff();
 
   return (
     <MenuSelectionView
@@ -47,6 +51,9 @@ export default async function MenuPage() {
       deliveryEnd={rangeEnd}
       myDeliveryDates={myDeliveryDates}
       todayStr={todayStr}
+      cutoffDay={cutoff.day}
+      cutoffTime={cutoff.time}
+      saladsPerDelivery={saladsPerDelivery}
     />
   );
 }

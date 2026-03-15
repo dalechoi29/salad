@@ -1250,13 +1250,15 @@ function SubscriptionStatus({
             </Button>
           </Link>
           <Popover>
-            <PopoverTrigger render={<button type="button" className="flex w-full cursor-pointer" />}>
-              <Button
-                className="h-12 w-full text-base opacity-40 pointer-events-none"
-                disabled
-              >
-                결제 완료 신청
-              </Button>
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  className="inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 text-base font-medium text-primary-foreground opacity-40"
+                />
+              }
+            >
+              결제 완료 신청
             </PopoverTrigger>
             <PopoverContent side="bottom" className="w-auto px-4 py-3 text-sm">
               {formatDate(period.pay_start)}부터 신청할 수 있어요!

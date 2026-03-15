@@ -1,13 +1,13 @@
 import { getActivePeriod, getMySubscription } from "@/lib/actions/subscription";
 import { getMyPickups } from "@/lib/actions/pickup";
 import { getMyMenuSelections } from "@/lib/actions/menu";
-import { formatDateISO } from "@/lib/utils";
+import { formatDateISO, getKSTDate } from "@/lib/utils";
 import { PickupView } from "./pickup-view";
 
 export default async function PickupPage() {
   const period = await getActivePeriod();
 
-  const today = new Date();
+  const today = getKSTDate();
   const pastStart = new Date(today);
   pastStart.setDate(pastStart.getDate() - 30);
 

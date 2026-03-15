@@ -19,6 +19,8 @@ import {
   ChevronRight,
   Loader2,
   CalendarDays,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
 import { formatDateShort } from "@/lib/utils";
@@ -26,7 +28,7 @@ import type { DailyMenu, MenuSelection, DietaryPreference } from "@/types";
 import {
   getDailyMenus,
   getMyMenuSelections,
-  selectMenu,
+  updateMenuQuantity,
   toggleFavorite,
   getMyFavorites,
 } from "@/lib/actions/menu";
@@ -71,12 +73,24 @@ function getWeekNumber(dateStr: string): string {
   return `${y}-${m}-${day}`;
 }
 
-function isSelectionClosed(deliveryDateStr: string): boolean {
-  const deliveryDate = new Date(deliveryDateStr + "T00:00:00");
-  const cutoff = new Date(deliveryDate);
-  cutoff.setDate(cutoff.getDate() - 2);
-  cutoff.setHours(16, 0, 0, 0);
-  return new Date() >= cutoff;
+function isSelectionClosed(
+  deliveryDateStr: string,
+  cutoffDay: number,
+  cutoffTime: string
+): boolean {
+  const delivery = new Date(deliveryDateStr + "T00:00:00");
+  const deliveryDow = delivery.getDay();
+  const mondayOffset = deliveryDow === 0 ? 6 : deliveryDow - 1;
+  const weekMonday = new Date(delivery);
+  weekMonday.setDate(delivery.getDate() - mondayOffset);
+
+  const prevWeekDay = new Date(weekMonday);
+  prevWeekDay.setDate(weekMonday.getDate() - 7 + (cutoffDay - 1));
+
+  const [hours, minutes] = cutoffTime.split(":").map(Number);
+  prevWeekDay.setHours(hours, minutes, 59, 999);
+
+  return new Date() >= prevWeekDay;
 }
 
 interface MenuSelectionViewProps {
@@ -84,6 +98,9 @@ interface MenuSelectionViewProps {
   deliveryEnd: string | null;
   myDeliveryDates?: string[];
   todayStr?: string;
+  cutoffDay?: number;
+  cutoffTime?: string;
+  saladsPerDelivery?: number;
 }
 
 export function MenuSelectionView({
@@ -91,12 +108,15 @@ export function MenuSelectionView({
   deliveryEnd,
   myDeliveryDates,
   todayStr,
+  cutoffDay = 4,
+  cutoffTime = "23:59",
+  saladsPerDelivery = 1,
 }: MenuSelectionViewProps) {
   const [dailyMenus, setDailyMenus] = useState<DailyMenu[]>([]);
   const [selections, setSelections] = useState<MenuSelection[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [selectingDate, setSelectingDate] = useState<string | null>(null);
+  const [updatingMenuId, setUpdatingMenuId] = useState<string | null>(null);
 
   const router = useRouter();
   const allWeekdays =
@@ -179,24 +199,45 @@ export function MenuSelectionView({
     return dailyMenus.filter((dm) => dm.delivery_date === dateStr);
   }
 
-  function getSelectionForDate(dateStr: string): MenuSelection | undefined {
-    return selections.find((s) => s.delivery_date === dateStr);
+  function getSelectionsForDate(dateStr: string): MenuSelection[] {
+    return selections.filter((s) => s.delivery_date === dateStr);
   }
 
-  async function handleSelect(dailyMenuId: string, dateStr: string) {
-    setSelectingDate(dateStr);
+  function getQuantityForMenu(dateStr: string, dailyMenuId: string): number {
+    const sel = selections.find(
+      (s) => s.delivery_date === dateStr && s.daily_menu_id === dailyMenuId
+    );
+    return sel?.quantity ?? 0;
+  }
+
+  function getDayTotal(dateStr: string): number {
+    return getSelectionsForDate(dateStr).reduce(
+      (sum, s) => sum + (s.quantity ?? 1),
+      0
+    );
+  }
+
+  async function handleQuantityChange(
+    dailyMenuId: string,
+    dateStr: string,
+    newQuantity: number
+  ) {
+    setUpdatingMenuId(dailyMenuId);
     try {
-      const result = await selectMenu(dailyMenuId, dateStr);
+      const result = await updateMenuQuantity(dailyMenuId, dateStr, newQuantity);
       if (result.error) {
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
-      toast.success("메뉴가 선택되었습니다");
 
-      const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
       setSelections((prev) => {
-        const filtered = prev.filter((s) => s.delivery_date !== dateStr);
+        const filtered = prev.filter(
+          (s) =>
+            !(s.delivery_date === dateStr && s.daily_menu_id === dailyMenuId)
+        );
+        if (newQuantity <= 0) return filtered;
+        const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
         return [
           ...filtered,
           {
@@ -204,13 +245,14 @@ export function MenuSelectionView({
             user_id: "",
             daily_menu_id: dailyMenuId,
             delivery_date: dateStr,
+            quantity: newQuantity,
             daily_menu_assignment: matchingMenu ?? null,
             created_at: new Date().toISOString(),
           } as MenuSelection,
         ];
       });
     } finally {
-      setSelectingDate(null);
+      setUpdatingMenuId(null);
     }
   }
 
@@ -254,7 +296,7 @@ export function MenuSelectionView({
     );
   }
 
-  const selectedCount = selections.length;
+  const selectedCount = selections.reduce((sum, s) => sum + (s.quantity ?? 1), 0);
   const totalDates = weekdays.length;
 
   return (
@@ -300,9 +342,9 @@ export function MenuSelectionView({
       <div className="space-y-4">
         {currentWeekDates.map((dateStr) => {
           const menusForDay = getMenusForDate(dateStr);
-          const selection = getSelectionForDate(dateStr);
-          const isSelecting = selectingDate === dateStr;
-          const closed = !isBrowseOnly && isSelectionClosed(dateStr);
+          const dayTotal = getDayTotal(dateStr);
+          const dayComplete = !isBrowseOnly && dayTotal >= saladsPerDelivery;
+          const closed = !isBrowseOnly && isSelectionClosed(dateStr, cutoffDay, cutoffTime);
 
           return (
             <Card key={dateStr}>
@@ -317,13 +359,13 @@ export function MenuSelectionView({
                         Today
                       </Badge>
                     )}
-                    {closed && !selection && (
+                    {closed && dayTotal === 0 && (
                       <Badge variant="secondary" className="text-xs px-2 py-0">
                         마감
                       </Badge>
                     )}
                   </div>
-                  {!isBrowseOnly && selection && (
+                  {!isBrowseOnly && dayComplete ? (
                     <Badge
                       variant="outline"
                       className="border-green-500/30 bg-green-50 text-xs text-green-700 dark:bg-green-900/20 dark:text-green-400"
@@ -331,7 +373,11 @@ export function MenuSelectionView({
                       <Check className="mr-0.5 h-3 w-3" />
                       선택 완료
                     </Badge>
-                  )}
+                  ) : !isBrowseOnly && dayTotal > 0 ? (
+                    <Badge variant="outline" className="text-xs">
+                      {dayTotal}/{saladsPerDelivery}
+                    </Badge>
+                  ) : null}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -342,25 +388,28 @@ export function MenuSelectionView({
                   </div>
                 ) : (
                   menusForDay.map((dm, idx) => {
-                    const isSelected =
-                      selection?.daily_menu_id === dm.id;
+                    const qty = getQuantityForMenu(dateStr, dm.id);
                     const menu = dm.menu;
                     if (!menu) return null;
                     const isFav = favoriteIds.has(menu.id);
+                    const isUpdating = updatingMenuId === dm.id;
+                    const canIncrease = dayTotal < saladsPerDelivery && !closed;
+                    const canDecrease = qty > 0 && !closed;
 
                     return (
                       <div
                         key={dm.id}
-                        className={`flex gap-3 rounded-lg border p-2.5 transition-colors ${
-                          !isBrowseOnly && isSelected
+                        role="link"
+                        tabIndex={0}
+                        onClick={() => router.push(`/menu/${menu.id}`)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/menu/${menu.id}`); } }}
+                        className={`flex cursor-pointer gap-3 rounded-lg border p-2.5 transition-colors ${
+                          qty > 0
                             ? "border-green-500/40 bg-green-50/50 dark:bg-green-900/10"
-                            : "hover:bg-accent/30"
+                            : "hover:bg-accent/50 active:bg-accent/70"
                         }`}
                       >
-                        <Link
-                          href={`/menu/${menu.id}`}
-                          className="flex-shrink-0"
-                        >
+                        <div className="flex-shrink-0">
                           {menu.image_url ? (
                             <img
                               src={menu.image_url}
@@ -372,21 +421,15 @@ export function MenuSelectionView({
                               <UtensilsCrossed className="h-6 w-6 text-muted-foreground" />
                             </div>
                           )}
-                        </Link>
+                        </div>
 
                         <div className="min-w-0 flex-1">
-                          <Link
-                            href={`/menu/${menu.id}`}
-                            className="text-lg font-bold leading-tight hover:underline"
-                          >
+                          <span className="text-lg font-bold leading-tight">
                             {idx + 1}
-                          </Link>
-                          <Link
-                            href={`/menu/${menu.id}`}
-                            className="block text-sm font-medium leading-snug hover:underline"
-                          >
+                          </span>
+                          <p className="text-sm font-medium leading-snug">
                             {menu.title}
-                          </Link>
+                          </p>
                           {menu.sauce && (
                             <p className="text-sm text-muted-foreground">
                               {menu.sauce}
@@ -401,32 +444,41 @@ export function MenuSelectionView({
                           )}
                         </div>
 
-                        {!isBrowseOnly && (
-                          <div className="flex flex-shrink-0 items-center">
-                            {isSelected ? (
-                              <Button
-                                size="sm"
-                                className="h-8 gap-1 bg-green-600 text-sm text-white hover:bg-green-700"
-                                disabled
-                              >
-                                <Check className="h-3.5 w-3.5" />
-                                선택됨
-                              </Button>
-                            ) : closed ? null : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 text-sm"
-                                disabled={isSelecting}
-                                onClick={() =>
-                                  handleSelect(dm.id, dateStr)
-                                }
-                              >
-                                {isSelecting ? (
-                                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                ) : null}
-                                {selection ? "변경" : "선택"}
-                              </Button>
+                        {!isBrowseOnly && !closed && (
+                          <div
+                            className="flex flex-shrink-0 items-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {isUpdating ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  className="h-7 w-7"
+                                  disabled={!canDecrease || isUpdating}
+                                  onClick={() =>
+                                    handleQuantityChange(dm.id, dateStr, qty - 1)
+                                  }
+                                >
+                                  <Minus className="h-3.5 w-3.5" />
+                                </Button>
+                                <span className="w-5 text-center text-sm font-semibold">
+                                  {qty}
+                                </span>
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  className="h-7 w-7"
+                                  disabled={!canIncrease || isUpdating}
+                                  onClick={() =>
+                                    handleQuantityChange(dm.id, dateStr, qty + 1)
+                                  }
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
                             )}
                           </div>
                         )}

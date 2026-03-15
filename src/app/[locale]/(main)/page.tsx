@@ -102,45 +102,32 @@ export default async function HomePage() {
       ? (todaySelections[0].daily_menu_assignment as any)?.menu?.title ?? null
       : null;
 
-  const isAdmin = profile?.role === "admin";
-
-  let subStatusProps: {
-    currentPeriod: SubscriptionPeriod | null;
-    nextPeriod: SubscriptionPeriod | null;
-    currentCounts: Record<string, number>;
-    nextCounts: Record<string, number>;
-    holidays: Holiday[];
-  } | null = null;
-
-  if (profile) {
-    const allPeriods = await getSubscriptionPeriods();
-    const kstForPeriod = getKSTDate();
-    const cm = kstForPeriod.getMonth() + 1;
-    const cy = kstForPeriod.getFullYear();
-    const nm = cm === 12 ? 1 : cm + 1;
-    const ny = cm === 12 ? cy + 1 : cy;
-    const curMonthStr = `${cy}년 ${cm}월`;
-    const nxtMonthStr = `${ny}년 ${nm}월`;
-    const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
-    const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
-    const [cc, nc, hols] = await Promise.all([
-      curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
-      nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
-      getHolidays(),
-    ]);
-    subStatusProps = {
-      currentPeriod: curPeriod,
-      nextPeriod: nxtPeriod,
-      currentCounts: cc,
-      nextCounts: nc,
-      holidays: hols,
-    };
-  }
+  const allPeriods = await getSubscriptionPeriods();
+  const kstForPeriod = getKSTDate();
+  const cm = kstForPeriod.getMonth() + 1;
+  const cy = kstForPeriod.getFullYear();
+  const nm = cm === 12 ? 1 : cm + 1;
+  const ny = cm === 12 ? cy + 1 : cy;
+  const curMonthStr = `${cy}년 ${cm}월`;
+  const nxtMonthStr = `${ny}년 ${nm}월`;
+  const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
+  const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
+  const [cc, nc, hols] = await Promise.all([
+    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
+    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
+    getHolidays(),
+  ]);
+  const subStatusProps = {
+    currentPeriod: curPeriod,
+    nextPeriod: nxtPeriod,
+    currentCounts: cc,
+    nextCounts: nc,
+    holidays: hols,
+  };
 
   return (
     <HomeContent
       isLoggedIn={!!profile}
-      isAdmin={isAdmin}
       nickname={profile?.nickname ?? ""}
       period={period}
       subscription={subscription}
@@ -171,7 +158,6 @@ const DIETARY_LABELS: Record<string, string> = {
 
 function HomeContent({
   isLoggedIn,
-  isAdmin,
   nickname,
   period,
   subscription,
@@ -189,7 +175,6 @@ function HomeContent({
   subStatusProps,
 }: {
   isLoggedIn: boolean;
-  isAdmin: boolean;
   nickname: string;
   period: any;
   subscription: any;
@@ -453,7 +438,7 @@ function HomeContent({
       )}
 
       {/* Subscription Status */}
-      {isLoggedIn && subStatusProps && (
+      {subStatusProps && (
         <div className="pt-2">
           <SubscriptionStatusView
             currentPeriod={subStatusProps.currentPeriod}
@@ -463,7 +448,7 @@ function HomeContent({
             holidays={subStatusProps.holidays}
             showBackButton={false}
             showTitle
-            isAdmin={isAdmin}
+            isLoggedIn={isLoggedIn}
           />
         </div>
       )}

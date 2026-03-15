@@ -1,11 +1,12 @@
 import { getSubscriptionPeriods } from "@/lib/actions/subscription";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getSubscriptionDayCounts } from "@/lib/actions/admin";
+import { getKSTDate } from "@/lib/utils";
 import { SubscriptionStatusView } from "./subscription-status-view";
 
 export default async function AdminSubscriptionStatusPage() {
   const periods = await getSubscriptionPeriods();
-  const now = new Date();
+  const now = getKSTDate();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
   const nextMonth = currentMonth === 12 ? 1 : currentMonth + 1;
@@ -30,7 +31,6 @@ export default async function AdminSubscriptionStatusPage() {
       currentCounts={currentCounts}
       nextCounts={nextCounts}
       holidays={holidays}
-      isAdmin
     />
   );
 }

@@ -9,7 +9,7 @@ import {
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
-import { deliveryDaysToDateStrings } from "@/lib/utils";
+import { deliveryDaysToDateStrings, getKSTDate } from "@/lib/utils";
 import { SubscriptionView } from "./subscription-view";
 
 export default async function SubscriptionPage({
@@ -30,7 +30,7 @@ export default async function SubscriptionPage({
     ? await getSubscriptionPeriodById(periodIdParam)
     : await getActivePeriod();
 
-  const now = new Date();
+  const now = getKSTDate();
   let existingSubscription = null;
   let holidays: string[] = [];
   let savedDateStrings: string[] = [];

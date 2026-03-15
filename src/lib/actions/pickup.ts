@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { formatDateISO } from "@/lib/utils";
+import { formatDateISO, getKSTDate } from "@/lib/utils";
 import type { ActionResult, Pickup } from "@/types";
 
 export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
@@ -127,7 +127,7 @@ async function updateStreak(userId: string): Promise<void> {
   }
 
   let streak = 0;
-  const today = new Date();
+  const today = getKSTDate();
   const todayStr = formatDateISO(today);
 
   const confirmedDates = new Set(pickups.map((p: { pickup_date: string }) => p.pickup_date));

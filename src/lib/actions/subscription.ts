@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { getKSTDate, formatDateISO } from "@/lib/utils";
 import type {
   ActionResult,
   SubscriptionPeriod,
@@ -34,8 +35,9 @@ export async function getSubscriptionPeriodById(
 
 export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
   const supabase = await createClient();
-  const now = new Date().toISOString();
-  const todayDate = new Date().toISOString().split("T")[0];
+  const kstNow = getKSTDate();
+  const now = kstNow.toISOString();
+  const todayDate = formatDateISO(kstNow);
 
   // First: check if we're in an apply/pay window (for upcoming subscriptions)
   const { data: applyPeriod } = await supabase
@@ -240,7 +242,7 @@ export async function createOrUpdateSubscription(
 
   if (!period) return { error: "Subscription period not found" };
 
-  const now = new Date();
+  const now = getKSTDate();
   const payEnd = new Date(period.pay_end);
 
   if (now > payEnd) {

@@ -197,9 +197,10 @@ export async function getMyMenuSelections(
   return (data as MenuSelection[]) ?? [];
 }
 
-export async function selectMenu(
+export async function updateMenuQuantity(
   dailyMenuId: string,
-  deliveryDate: string
+  deliveryDate: string,
+  quantity: number
 ): Promise<ActionResult> {
   const supabase = await createClient();
   const {
@@ -208,17 +209,28 @@ export async function selectMenu(
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
+  if (quantity <= 0) {
+    const { error } = await supabase
+      .from("user_menu_selections")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("daily_menu_id", dailyMenuId);
+
+    if (error) return { error: error.message };
+    return { success: true };
+  }
+
   const { data: existing } = await supabase
     .from("user_menu_selections")
     .select("id")
     .eq("user_id", user.id)
-    .eq("delivery_date", deliveryDate)
+    .eq("daily_menu_id", dailyMenuId)
     .single();
 
   if (existing) {
     const { error } = await supabase
       .from("user_menu_selections")
-      .update({ daily_menu_id: dailyMenuId })
+      .update({ quantity })
       .eq("id", existing.id);
 
     if (error) return { error: error.message };
@@ -229,33 +241,12 @@ export async function selectMenu(
         user_id: user.id,
         daily_menu_id: dailyMenuId,
         delivery_date: deliveryDate,
+        quantity,
       });
 
     if (error) return { error: error.message };
   }
 
-  return { success: true };
-}
-
-export async function removeMenuSelection(
-  deliveryDate: string
-): Promise<ActionResult> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { error: "AUTH_REQUIRED" };
-
-  const { error } = await supabase
-    .from("user_menu_selections")
-    .delete()
-    .eq("user_id", user.id)
-    .eq("delivery_date", deliveryDate);
-
-  if (error) return { error: error.message };
-
-  revalidatePath("/menu");
   return { success: true };
 }
 

@@ -84,6 +84,12 @@ const adminSections: { label: string; icon: React.ComponentType<{ className?: st
         title: "공휴일 관리",
         description: "공휴일 추가 및 배달 일정 관리",
       },
+      {
+        href: "/admin/settings",
+        icon: CalendarOff,
+        title: "마감일 관리",
+        description: "메뉴 선택 마감일 설정",
+      },
     ],
   },
   {

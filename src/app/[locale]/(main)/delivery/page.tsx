@@ -1,6 +1,7 @@
 import { getActivePeriod, getMySubscription } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { getHolidays } from "@/lib/actions/holiday";
+import { getKSTDate } from "@/lib/utils";
 import { DeliveryDaySelector } from "./delivery-day-selector";
 
 export default async function DeliveryPage() {
@@ -24,7 +25,7 @@ export default async function DeliveryPage() {
     );
   }
 
-  const now = new Date();
+  const now = getKSTDate();
   const [deliveryDays, holidays] = await Promise.all([
     getMyDeliveryDays(subscription.id),
     getHolidays(now.getFullYear()),

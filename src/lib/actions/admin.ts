@@ -4,6 +4,52 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types";
 
+// ─── Admin Settings ─────────────────────────────────────────
+
+export async function getAdminSettings(): Promise<Record<string, string>> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("admin_settings").select("key, value");
+  const settings: Record<string, string> = {};
+  for (const row of data ?? []) {
+    settings[row.key] = row.value;
+  }
+  return settings;
+}
+
+export async function getMenuSelectionCutoff(): Promise<{ day: number; time: string }> {
+  const settings = await getAdminSettings();
+  return {
+    day: parseInt(settings.menu_selection_cutoff_day ?? "4", 10),
+    time: settings.menu_selection_cutoff_time ?? "23:59",
+  };
+}
+
+export async function updateAdminSetting(
+  key: string,
+  value: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .single();
+
+  if (adminProfile?.role !== "admin") {
+    return { error: "권한이 없습니다" };
+  }
+
+  const { error } = await supabase
+    .from("admin_settings")
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  return { success: true };
+}
+
 export async function approveUser(
   userId: string,
   password: string
@@ -294,12 +340,15 @@ export async function getDashboardStats(
 
   const { data: selections } = await supabase
     .from("user_menu_selections")
-    .select("delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
+    .select("delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
 
   const activeSelections = (selections ?? []).filter(
     (s: any) => !disabledUserIds.has(s.user_id)
   );
-  const totalDeliveries = activeSelections.length;
+  const totalDeliveries = activeSelections.reduce(
+    (sum: number, s: any) => sum + ((s.quantity as number) ?? 1),
+    0
+  );
   const pickupRate = totalDeliveries > 0
     ? Math.round(((totalPickups ?? 0) / totalDeliveries) * 100)
     : 0;
@@ -308,17 +357,18 @@ export async function getDashboardStats(
   const dailyCountMap = new Map<string, number>();
 
   for (const sel of activeSelections) {
+    const qty = (sel as any).quantity ?? 1;
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (menu) {
       const existing = menuCountMap.get(menu.id);
       if (existing) {
-        existing.count += 1;
+        existing.count += qty;
       } else {
-        menuCountMap.set(menu.id, { menuId: menu.id, menuTitle: menu.title, count: 1 });
+        menuCountMap.set(menu.id, { menuId: menu.id, menuTitle: menu.title, count: qty });
       }
     }
     const d = sel.delivery_date;
-    dailyCountMap.set(d, (dailyCountMap.get(d) ?? 0) + 1);
+    dailyCountMap.set(d, (dailyCountMap.get(d) ?? 0) + qty);
   }
 
   const menuPopularity = Array.from(menuCountMap.values())
@@ -371,24 +421,37 @@ export async function getVendorReport(
     .eq("status", "disabled");
   const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
 
-  const { data: selections } = await supabase
-    .from("user_menu_selections")
-    .select(
-      "delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
-    )
-    .gte("delivery_date", startDate)
-    .lte("delivery_date", endDate)
-    .order("delivery_date");
+  const [selectionsResult, deliveryDaysResult, assignmentsResult] = await Promise.all([
+    supabase
+      .from("user_menu_selections")
+      .select(
+        "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+      )
+      .gte("delivery_date", startDate)
+      .lte("delivery_date", endDate)
+      .order("delivery_date"),
+    supabase
+      .from("delivery_days")
+      .select("user_id, week_start, selected_days")
+      .gte("week_start", startDate)
+      .lte("week_start", endDate),
+    supabase
+      .from("daily_menu_assignments")
+      .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
+      .eq("slot_type", "main")
+      .gte("delivery_date", startDate)
+      .lte("delivery_date", endDate),
+  ]);
 
-  const activeSelections = (selections ?? []).filter(
+  const activeSelections = (selectionsResult.data ?? []).filter(
     (s: any) => !disabledUserIds.has(s.user_id)
   );
-  if (activeSelections.length === 0) return [];
 
   const dateMap = new Map<string, Map<string, { menuTitle: string; count: number }>>();
 
   for (const sel of activeSelections) {
     const date = sel.delivery_date;
+    const qty = (sel as any).quantity ?? 1;
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (!menu) continue;
 
@@ -397,15 +460,81 @@ export async function getVendorReport(
 
     const existing = menuMap.get(menu.id);
     if (existing) {
-      existing.count += 1;
+      existing.count += qty;
     } else {
-      menuMap.set(menu.id, { menuTitle: menu.title, count: 1 });
+      menuMap.set(menu.id, { menuTitle: menu.title, count: qty });
     }
   }
 
+  const subscribersPerDate = new Map<string, Set<string>>();
+  for (const dd of deliveryDaysResult.data ?? []) {
+    if (disabledUserIds.has(dd.user_id)) continue;
+    const weekStart = new Date(dd.week_start + "T00:00:00");
+    for (const dayNum of dd.selected_days) {
+      const dateObj = new Date(weekStart);
+      dateObj.setDate(weekStart.getDate() + (dayNum - 1));
+      const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
+      if (dateStr < startDate || dateStr > endDate) continue;
+      if (!subscribersPerDate.has(dateStr)) subscribersPerDate.set(dateStr, new Set());
+      subscribersPerDate.get(dateStr)!.add(dd.user_id);
+    }
+  }
+
+  const mainMenusPerDate = new Map<string, { id: string; title: string }[]>();
+  for (const a of assignmentsResult.data ?? []) {
+    const menu = (a as any).menu;
+    if (!menu) continue;
+    const date = a.delivery_date;
+    if (!mainMenusPerDate.has(date)) mainMenusPerDate.set(date, []);
+    mainMenusPerDate.get(date)!.push({ id: menu.id, title: menu.title });
+  }
+
+  const selectedUsersPerDate = new Map<string, Set<string>>();
+  for (const sel of activeSelections) {
+    const date = sel.delivery_date;
+    if (!selectedUsersPerDate.has(date)) selectedUsersPerDate.set(date, new Set());
+    selectedUsersPerDate.get(date)!.add(sel.user_id);
+  }
+
+  const allDates = new Set([
+    ...dateMap.keys(),
+    ...subscribersPerDate.keys(),
+  ]);
+
   const result: VendorReportRow[] = [];
-  for (const [date, menuMap] of dateMap) {
+  for (const date of allDates) {
+    if (!dateMap.has(date)) dateMap.set(date, new Map());
+    const menuMap = dateMap.get(date)!;
+
+    const totalSubscribers = subscribersPerDate.get(date)?.size ?? 0;
+    const selectedCount = selectedUsersPerDate.get(date)?.size ?? 0;
+    const unselectedCount = Math.max(0, totalSubscribers - selectedCount);
+
+    if (unselectedCount > 0) {
+      const mainMenus = mainMenusPerDate.get(date) ?? [];
+      if (mainMenus.length > 0) {
+        const perMenu = Math.floor(unselectedCount / mainMenus.length);
+        let remainder = unselectedCount % mainMenus.length;
+
+        for (const mm of mainMenus) {
+          const extra = remainder > 0 ? 1 : 0;
+          remainder--;
+          const addCount = perMenu + extra;
+          if (addCount === 0) continue;
+
+          const existing = menuMap.get(mm.id);
+          if (existing) {
+            existing.count += addCount;
+          } else {
+            menuMap.set(mm.id, { menuTitle: mm.title, count: addCount });
+          }
+        }
+      }
+    }
+
     const menuBreakdown = Array.from(menuMap.values()).sort((a, b) => b.count - a.count);
+    if (menuBreakdown.length === 0) continue;
+
     result.push({
       date,
       totalSalads: menuBreakdown.reduce((sum, m) => sum + m.count, 0),
@@ -524,7 +653,7 @@ export async function getDeliverySummary(
   const { data: selections } = await supabase
     .from("user_menu_selections")
     .select(
-      "delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
+      "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
     )
     .gte("delivery_date", startDate)
     .lte("delivery_date", endDate)
@@ -542,6 +671,7 @@ export async function getDeliverySummary(
 
   for (const sel of activeSelections) {
     const date = sel.delivery_date;
+    const qty = (sel as any).quantity ?? 1;
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (!menu) continue;
 
@@ -550,13 +680,13 @@ export async function getDeliverySummary(
 
     const existing = menuMap.get(menu.id);
     if (existing) {
-      existing.count += 1;
+      existing.count += qty;
     } else {
       menuMap.set(menu.id, {
         menuId: menu.id,
         menuTitle: menu.title,
         menuImage: menu.image_url,
-        count: 1,
+        count: qty,
       });
     }
   }
@@ -627,12 +757,12 @@ export async function getSubscriptionDayCounts(
 export async function getSubscribersForDate(
   periodId: string,
   targetDate: string
-): Promise<{ userId: string; realName: string }[]> {
+): Promise<{ userId: string; realName: string; saladsPerDelivery: number }[]> {
   const supabase = await createClient();
 
   const { data: subscriptions } = await supabase
     .from("subscriptions")
-    .select("id, user_id")
+    .select("id, user_id, salads_per_delivery")
     .eq("period_id", periodId);
 
   if (!subscriptions?.length) return [];
@@ -646,7 +776,9 @@ export async function getSubscribersForDate(
   );
 
   const subIds = subscriptions.map((s: any) => s.id);
-  const subUserMap = new Map(subscriptions.map((s: any) => [s.id, s.user_id]));
+  const userSaladsMap = new Map(
+    subscriptions.map((s: any) => [s.user_id, s.salads_per_delivery as number])
+  );
 
   const { data: deliveryDays } = await supabase
     .from("delivery_days")
@@ -681,5 +813,6 @@ export async function getSubscribersForDate(
   return (profiles ?? []).map((p: any) => ({
     userId: p.id,
     realName: p.real_name || "이름 없음",
+    saladsPerDelivery: userSaladsMap.get(p.id) ?? 1,
   }));
 }

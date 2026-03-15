@@ -87,6 +87,7 @@ export interface MenuSelection {
   user_id: string;
   daily_menu_id: string;
   delivery_date: string;
+  quantity: number;
   created_at: string;
   daily_menu_assignment?: DailyMenu;
 }
