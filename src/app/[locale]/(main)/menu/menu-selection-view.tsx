@@ -33,6 +33,7 @@ import {
   getMyFavorites,
 } from "@/lib/actions/menu";
 import { handleActionError } from "@/lib/handle-action-error";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const DIETARY_LABELS: Record<string, string> = {
   vegan: "비건",
@@ -288,16 +289,46 @@ export function MenuSelectionView({
   if (loading) {
     return (
       <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-2xl font-bold tracking-tight">메뉴 선택</h1>
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-28" />
+          <Skeleton className="h-6 w-20 rounded-full" />
         </div>
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-8 rounded" />
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-8 w-8 rounded" />
+        </div>
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-2">
+              <Skeleton className="h-5 w-24" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[1, 2].map((j) => (
+                <div key={j} className="flex gap-3 rounded-lg border p-2.5">
+                  <Skeleton className="h-24 w-24 rounded-lg" />
+                  <div className="flex-1 space-y-2 py-1">
+                    <Skeleton className="h-5 w-6" />
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-20" />
+                  </div>
+                  <div className="flex items-center">
+                    <Skeleton className="h-8 w-16 rounded-md" />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ))}
       </div>
     );
   }
 
-  const selectedCount = selections.reduce((sum, s) => sum + (s.quantity ?? 1), 0);
-  const totalDates = weekdays.length;
+  const openDates = weekdays.filter(
+    (d) => !isSelectionClosed(d, cutoffDay, cutoffTime)
+  );
+  const selectedCount = openDates.filter((d) => getDayTotal(d) > 0).length;
+  const totalOpenDates = openDates.length;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -307,7 +338,7 @@ export function MenuSelectionView({
         </h1>
         {!isBrowseOnly && (
           <Badge variant="secondary" className="text-sm">
-            {selectedCount}/{totalDates} 선택됨
+            {selectedCount}/{totalOpenDates} 선택됨
           </Badge>
         )}
       </div>
@@ -451,6 +482,30 @@ export function MenuSelectionView({
                           >
                             {isUpdating ? (
                               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            ) : saladsPerDelivery <= 1 ? (
+                              qty > 0 ? (
+                                <Button
+                                  size="sm"
+                                  className="h-8 gap-1 bg-green-600 text-sm text-white hover:bg-green-700"
+                                  onClick={() =>
+                                    handleQuantityChange(dm.id, dateStr, 0)
+                                  }
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                  선택됨
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 text-sm"
+                                  onClick={() =>
+                                    handleQuantityChange(dm.id, dateStr, 1)
+                                  }
+                                >
+                                  {dayTotal > 0 ? "변경" : "선택"}
+                                </Button>
+                              )
                             ) : (
                               <div className="flex items-center gap-1.5">
                                 <Button

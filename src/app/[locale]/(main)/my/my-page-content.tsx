@@ -27,14 +27,9 @@ import {
   Flame,
   LogOut,
   UtensilsCrossed,
-  Check,
-  Clock,
   Loader2,
   Shield,
   MessageSquare,
-  ChevronDown,
-  ChevronUp,
-  Archive,
   KeyRound,
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
@@ -46,98 +41,24 @@ import { deleteReview } from "@/lib/actions/review";
 import { deletePost } from "@/lib/actions/community";
 import { handleActionError } from "@/lib/handle-action-error";
 import { ReviewEditDialog } from "@/components/shared/review-edit-dialog";
-import { FavoriteItem, ReviewItem, PostItem } from "./my-list-items";
+import { SubscriptionCard, FavoriteItem, ReviewItem, PostItem } from "./my-list-items";
 import type { Profile, SubscriptionPeriod, MenuFavorite, Review, Post } from "@/types";
 import type { SubscriptionWithDetails } from "./page";
 
 interface MyPageContentProps {
   profile: Profile | null;
   period: SubscriptionPeriod | null;
-  activeSubscriptions: SubscriptionWithDetails[];
-  archivedSubscriptions: SubscriptionWithDetails[];
+  subscriptions: SubscriptionWithDetails[];
   initialFavorites: MenuFavorite[];
   initialReviews: Review[];
   streak: number;
   initialPosts: Post[];
 }
 
-function SubscriptionCard({ entry }: { entry: SubscriptionWithDetails }) {
-  const { subscription, period, deliveryDayCount } = entry;
-  const isPaid = subscription.payment_status === "completed";
-  const totalSalads = deliveryDayCount * (subscription.salads_per_delivery ?? 1);
-
-  const now = new Date();
-  const isApplying =
-    now >= new Date(period.apply_start) && now <= new Date(period.apply_end);
-  const isPaying =
-    now >= new Date(period.pay_start) && now <= new Date(period.pay_end);
-  const isActionable = isApplying || isPaying;
-
-  const targetMonthShort = period.target_month.replace(/^\d{4}년\s*/, "");
-
-  let title = period.target_month;
-  if (isApplying) title = `${targetMonthShort} 구독 신청 기간`;
-  else if (isPaying && !isPaid) title = "결제 기간";
-
-  const formatApplyEnd = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return `${d.getMonth() + 1}월 ${d.getDate()}일까지 신청해주세요`;
-  };
-
-  let subtitle: string | null = null;
-  if (isApplying) subtitle = formatApplyEnd(period.apply_end);
-  else if (isPaying && !isPaid) subtitle = "결제하고 '결제 완료'를 눌러주세요";
-
-  return (
-    <Link href={`/subscription?period=${period.id}`} className="block">
-      <Card className={`transition-colors hover:bg-accent/50 ${isActionable && !isPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
-        <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
-            <UtensilsCrossed className="h-5 w-5 text-green-500" />
-          </div>
-          <div className="flex-1">
-            <CardTitle className="text-base">{title}</CardTitle>
-            {subtitle && (
-              <p className="text-sm text-muted-foreground">{subtitle}</p>
-            )}
-          </div>
-          {isPaid ? (
-            <Badge
-              variant="secondary"
-              className="ml-auto gap-1 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-            >
-              <Check className="h-3 w-3" />
-              결제 완료
-            </Badge>
-          ) : (
-            <Badge
-              variant="secondary"
-              className="ml-auto gap-1 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-            >
-              <Clock className="h-3 w-3" />
-              결제 대기
-            </Badge>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-4 text-sm text-muted-foreground">
-            <span>주 {subscription.frequency_per_week}회</span>
-            <span>·</span>
-            <span>배달당 {subscription.salads_per_delivery}개</span>
-            <span>·</span>
-            <span>월 {totalSalads}개</span>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
-
 export function MyPageContent({
   profile,
   period,
-  activeSubscriptions,
-  archivedSubscriptions,
+  subscriptions,
   initialFavorites,
   initialReviews,
   streak,
@@ -155,7 +76,6 @@ export function MyPageContent({
   const [displayNickname, setDisplayNickname] = useState(profile?.nickname ?? "User");
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
   const [passwordDialog, setPasswordDialog] = useState(false);
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -279,11 +199,18 @@ export function MyPageContent({
         </CardHeader>
       </Card>
 
-      {/* Active Subscriptions */}
-      {activeSubscriptions.length > 0 ? (
-        activeSubscriptions.map((entry) => (
-          <SubscriptionCard key={entry.subscription.id} entry={entry} />
-        ))
+      {/* Subscriptions */}
+      {subscriptions.length > 0 ? (
+        <div className="space-y-2">
+          {subscriptions.map((entry) => (
+            <SubscriptionCard key={entry.subscription.id} entry={entry} />
+          ))}
+          <Link href="/my/subscriptions" className="block mt-3">
+            <Button variant="outline" className="w-full">
+              구독 이력 보기 ({subscriptions.length})
+            </Button>
+          </Link>
+        </div>
       ) : (
         <Link href="/subscription" className="block">
           <Card className="transition-colors hover:bg-accent/50">
@@ -300,55 +227,6 @@ export function MyPageContent({
             </CardHeader>
           </Card>
         </Link>
-      )}
-
-      {/* Archived Subscriptions */}
-      {archivedSubscriptions.length > 0 && (
-        <div className="space-y-2">
-          <button
-            onClick={() => setShowArchived((v) => !v)}
-            className="flex w-full items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <Archive className="h-4 w-4" />
-            지난 구독
-            <Badge variant="secondary" className="text-xs">
-              {archivedSubscriptions.length}
-            </Badge>
-            {showArchived ? (
-              <ChevronUp className="ml-auto h-4 w-4" />
-            ) : (
-              <ChevronDown className="ml-auto h-4 w-4" />
-            )}
-          </button>
-          {showArchived && (
-            <div className="space-y-2">
-              {archivedSubscriptions.map((entry) => {
-                const { subscription: sub, period: p, deliveryDayCount: count } = entry;
-                const totalSalads = count * (sub.salads_per_delivery ?? 1);
-                return (
-                  <Card key={sub.id} className="bg-muted/30">
-                    <CardContent className="py-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium">{p.target_month}</p>
-                          <p className="mt-0.5 text-sm text-muted-foreground">
-                            주 {sub.frequency_per_week}회 · 배달당 {sub.salads_per_delivery}개 · 월 {totalSalads}개
-                          </p>
-                        </div>
-                        <Badge
-                          variant="secondary"
-                          className="gap-1 bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-                        >
-                          완료
-                        </Badge>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </div>
       )}
 
       {/* Favorite Menus */}

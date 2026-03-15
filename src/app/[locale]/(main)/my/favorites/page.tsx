@@ -8,7 +8,7 @@ export default async function FavoritesPage() {
   const profile = await getCurrentProfile();
   if (!profile) {
     const locale = await getLocale();
-    redirect(`/${locale}/signup`);
+    redirect(`/${locale}/login`);
   }
 
   const favorites = await getMyFavorites();

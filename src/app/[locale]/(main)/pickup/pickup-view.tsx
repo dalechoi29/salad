@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -37,6 +37,8 @@ import { confirmPickup, undoPickup, getMyPickups } from "@/lib/actions/pickup";
 import { createReview, getMyReviews } from "@/lib/actions/review";
 import { handleActionError } from "@/lib/handle-action-error";
 
+const PAGE_SIZE = 15;
+
 function isPast(dateStr: string): boolean {
   return dateStr <= getTodayStr();
 }
@@ -72,6 +74,7 @@ export function PickupView({
 
   const router = useRouter();
   const todayStr = getTodayStr();
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadReviews() {
@@ -87,16 +90,78 @@ export function PickupView({
     ) ?? null;
   }
 
-  const deliveryDates = selections
-    .map((s) => ({
-      date: s.delivery_date,
-      menuId: (s.daily_menu_assignment as any)?.menu?.id ?? "",
-      menuTitle: (s.daily_menu_assignment as any)?.menu?.title ?? "메뉴",
-      menuImage: (s.daily_menu_assignment as any)?.menu?.image_url ?? null,
-      sauce: (s.daily_menu_assignment as any)?.menu?.sauce ?? "",
-    }))
-    .filter((d) => d.date && d.menuId)
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const allDeliveryDates = useMemo(
+    () =>
+      selections
+        .map((s) => ({
+          date: s.delivery_date,
+          menuId: (s.daily_menu_assignment as any)?.menu?.id ?? "",
+          menuTitle: (s.daily_menu_assignment as any)?.menu?.title ?? "메뉴",
+          menuImage: (s.daily_menu_assignment as any)?.menu?.image_url ?? null,
+          sauce: (s.daily_menu_assignment as any)?.menu?.sauce ?? "",
+        }))
+        .filter((d) => d.date && d.menuId)
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    [selections]
+  );
+
+  const availableMonths = useMemo(() => {
+    const monthSet = new Set<string>();
+    for (const d of allDeliveryDates) {
+      const [y, m] = d.date.split("-");
+      monthSet.add(`${y}-${m}`);
+    }
+    return Array.from(monthSet).sort();
+  }, [allDeliveryDates]);
+
+  const currentMonth = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (availableMonths.length > 0) {
+      const match = availableMonths.includes(currentMonth)
+        ? currentMonth
+        : availableMonths[availableMonths.length - 1];
+      setSelectedMonth(match);
+    }
+  }, [availableMonths, currentMonth]);
+
+  const filteredDates = useMemo(
+    () =>
+      selectedMonth
+        ? allDeliveryDates.filter((d) => d.date.startsWith(selectedMonth))
+        : allDeliveryDates,
+    [allDeliveryDates, selectedMonth]
+  );
+
+  const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setDisplayCount(PAGE_SIZE);
+  }, [selectedMonth]);
+
+  const visibleDates = filteredDates.slice(0, displayCount);
+  const hasMore = displayCount < filteredDates.length;
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setDisplayCount((prev) => prev + PAGE_SIZE);
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, selectedMonth]);
 
   const pickupMap = new Map(pickups.map((p) => [p.pickup_date, p]));
 
@@ -226,7 +291,28 @@ export function PickupView({
         </Link>
       </div>
 
-      {deliveryDates.length === 0 ? (
+      {availableMonths.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto">
+          {availableMonths.map((m) => {
+            const [y, mo] = m.split("-");
+            const label = `${parseInt(mo)}월`;
+            const isActive = selectedMonth === m;
+            return (
+              <Button
+                key={m}
+                size="sm"
+                variant={isActive ? "default" : "outline"}
+                className="flex-shrink-0"
+                onClick={() => setSelectedMonth(m)}
+              >
+                {label}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+
+      {filteredDates.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <UtensilsCrossed className="mb-2 h-8 w-8" />
@@ -236,7 +322,7 @@ export function PickupView({
         </Card>
       ) : (
         <div className="space-y-3">
-          {deliveryDates.map((item) => {
+          {visibleDates.map((item) => {
             const pickup = pickupMap.get(item.date);
             const isConfirmed = pickup?.confirmed === true;
             const isToday = item.date === todayStr;
@@ -344,6 +430,7 @@ export function PickupView({
               </Card>
             );
           })}
+          {hasMore && <div ref={sentinelRef} className="h-1" />}
         </div>
       )}
 

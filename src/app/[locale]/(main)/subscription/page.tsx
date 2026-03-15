@@ -20,7 +20,7 @@ export default async function SubscriptionPage({
   const profile = await getCurrentProfile();
   if (!profile) {
     const locale = await getLocale();
-    redirect(`/${locale}/signup`);
+    redirect(`/${locale}/login`);
   }
 
   const params = await searchParams;

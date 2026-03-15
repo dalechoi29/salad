@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
 import { getSubscribersForDate } from "@/lib/actions/admin";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { SubscriptionPeriod, Holiday } from "@/types";
 
 interface Props {
@@ -306,8 +307,14 @@ function MonthCalendar({
             <DialogTitle>{dialogDateFormatted} 구독자</DialogTitle>
           </DialogHeader>
           {dialogLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <div className="space-y-1">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+                  <Skeleton className="h-8 w-8 rounded-full" />
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-4 w-8" />
+                </div>
+              ))}
             </div>
           ) : dialogUsers.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">

@@ -91,7 +91,7 @@ function PostCard({ post, onVoteChange, categoryLabels, categoryColors }: { post
           )}
           <div className="mt-2 flex items-center justify-between">
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <span>{post.profile?.nickname ?? "익명"}</span>
+              <span>익명</span>
               <span>{timeAgo(post.created_at)}</span>
             </div>
             <div className="flex items-center gap-3 text-sm text-muted-foreground">

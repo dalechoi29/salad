@@ -48,18 +48,48 @@ function findCurrentSubscription(
 
 export default async function HomePage() {
   const todayStr = getTodayStr();
+  const kstNow = getKSTDate();
+  const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
+  const cm = kstNow.getMonth() + 1;
+  const cy = kstNow.getFullYear();
+  const nm = cm === 12 ? 1 : cm + 1;
+  const ny = cm === 12 ? cy + 1 : cy;
+  const curMonthStr = `${cy}년 ${cm}월`;
+  const nxtMonthStr = `${ny}년 ${nm}월`;
 
-  const [profile, period, allSubscriptions, todayMenus] = await Promise.all([
+  const [
+    profile,
+    period,
+    allSubscriptions,
+    todayMenus,
+    streak,
+    todayPickups,
+    todaySelections,
+    allPeriods,
+    hols,
+  ] = await Promise.all([
     getCurrentProfile(),
     getActivePeriod(),
     getMySubscriptions(),
     getDailyMenusByDate(todayStr),
+    getPickupStreak(),
+    getMyPickups(todayStr, todayStr),
+    getMyMenuSelections(todayStr, todayStr),
+    getSubscriptionPeriods(),
+    getHolidays(),
   ]);
 
   const subscription = findCurrentSubscription(allSubscriptions, todayStr);
-  const periodSubscription = period
-    ? await getMySubscription(period.id)
-    : null;
+
+  const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
+  const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
+
+  const [periodSubscription, deliveryDays, cc, nc] = await Promise.all([
+    period ? getMySubscription(period.id) : Promise.resolve(null),
+    subscription ? getMyDeliveryDays(subscription.id) : Promise.resolve([]),
+    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
+    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
+  ]);
 
   let deliveryDayCount = 0;
   let nextDeliveryDate: string | null = null;
@@ -67,33 +97,22 @@ export default async function HomePage() {
   let nextDeliverySelection: MenuSelection | null = null;
   let isMyDeliveryDay = false;
 
-  if (subscription) {
-    const days = await getMyDeliveryDays(subscription.id);
-    deliveryDayCount = countSelectedDays(days);
-
-    const myDates = deliveryDaysToDateStrings(days);
-    const myDateSet = new Set(myDates);
-    isMyDeliveryDay = myDateSet.has(todayStr);
+  if (subscription && deliveryDays.length > 0) {
+    deliveryDayCount = countSelectedDays(deliveryDays);
+    const myDates = deliveryDaysToDateStrings(deliveryDays);
+    isMyDeliveryDay = new Set(myDates).has(todayStr);
 
     const futureDates = myDates.filter((d) => d > todayStr);
     if (futureDates.length > 0) {
       nextDeliveryDate = futureDates[0];
-      nextDeliveryMenus = await getDailyMenusByDate(nextDeliveryDate);
-      const selections = await getMyMenuSelections(nextDeliveryDate, nextDeliveryDate);
-      if (selections.length > 0) {
-        nextDeliverySelection = selections[0];
-      }
+      const [menus, selections] = await Promise.all([
+        getDailyMenusByDate(nextDeliveryDate),
+        getMyMenuSelections(nextDeliveryDate, nextDeliveryDate),
+      ]);
+      nextDeliveryMenus = menus;
+      if (selections.length > 0) nextDeliverySelection = selections[0];
     }
   }
-
-  const kstNow = getKSTDate();
-  const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
-
-  const [streak, todayPickups, todaySelections] = await Promise.all([
-    getPickupStreak(),
-    getMyPickups(todayStr, todayStr),
-    getMyMenuSelections(todayStr, todayStr),
-  ]);
 
   const todayConfirmed = todayPickups.some((p) => p.confirmed);
 
@@ -102,21 +121,6 @@ export default async function HomePage() {
       ? (todaySelections[0].daily_menu_assignment as any)?.menu?.title ?? null
       : null;
 
-  const allPeriods = await getSubscriptionPeriods();
-  const kstForPeriod = getKSTDate();
-  const cm = kstForPeriod.getMonth() + 1;
-  const cy = kstForPeriod.getFullYear();
-  const nm = cm === 12 ? 1 : cm + 1;
-  const ny = cm === 12 ? cy + 1 : cy;
-  const curMonthStr = `${cy}년 ${cm}월`;
-  const nxtMonthStr = `${ny}년 ${nm}월`;
-  const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
-  const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
-  const [cc, nc, hols] = await Promise.all([
-    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
-    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
-    getHolidays(),
-  ]);
   const subStatusProps = {
     currentPeriod: curPeriod,
     nextPeriod: nxtPeriod,
@@ -235,9 +239,16 @@ function HomeContent({
     return `${d.getMonth() + 1}월 ${d.getDate()}일까지 신청해주세요`;
   };
 
+  const formatPayStart = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일부터 결제 가능해요`;
+  };
+
   let subscriptionCardSubtitle: string | null = null;
   if (isPayingPeriod && !isPeriodPaid) {
     subscriptionCardSubtitle = "결제하고 '결제 완료 신청'을 눌러주세요";
+  } else if (hasPeriodSub && !isPeriodPaid && period?.pay_start) {
+    subscriptionCardSubtitle = formatPayStart(period.pay_start);
   } else if (isApplyingPeriod && period?.apply_end) {
     subscriptionCardSubtitle = formatApplyEnd(period.apply_end);
   } else {
@@ -406,7 +417,7 @@ function HomeContent({
               <div className="min-w-0 flex-1">
                 <CardTitle className="text-base">
                   {nextDeliveryDate
-                    ? `${formatDateFull(nextDeliveryDate)}에 다음 배달이 와요`
+                    ? `${formatDateFull(nextDeliveryDate)}에 다음 배송이 와요`
                     : t("nextDelivery")}
                 </CardTitle>
                 {nextDeliveryDate ? (

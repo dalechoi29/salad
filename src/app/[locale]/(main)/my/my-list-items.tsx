@@ -3,7 +3,10 @@
 import {
   Card,
   CardContent,
+  CardHeader,
+  CardTitle,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   Pencil,
@@ -13,10 +16,91 @@ import {
   X,
   ThumbsUp,
   MessageCircle,
+  Check,
+  Clock,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { formatDateCompact } from "@/lib/utils";
 import type { MenuFavorite, Review, Post } from "@/types";
+import type { SubscriptionWithDetails } from "./page";
+
+export function SubscriptionCard({ entry }: { entry: SubscriptionWithDetails }) {
+  const { subscription, period, deliveryDayCount } = entry;
+  const isPaid = subscription.payment_status === "completed";
+  const totalSalads = deliveryDayCount * (subscription.salads_per_delivery ?? 1);
+
+  const now = new Date();
+  const isApplying =
+    now >= new Date(period.apply_start) && now <= new Date(period.apply_end);
+  const isPaying =
+    now >= new Date(period.pay_start) && now <= new Date(period.pay_end);
+  const isActionable = isApplying || isPaying;
+
+  const targetMonthShort = period.target_month.replace(/^\d{4}년\s*/, "");
+
+  let title = `${period.target_month} 구독`;
+  if (isApplying) title = `${targetMonthShort} 구독 신청 기간`;
+  else if (isPaying && !isPaid) title = "결제 기간";
+
+  const formatPayStart = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일부터 결제 가능해요`;
+  };
+
+  const formatApplyEnd = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일까지 신청해주세요`;
+  };
+
+  let subtitle: string | null = null;
+  if (isPaying && !isPaid) subtitle = "결제하고 '결제 완료'를 눌러주세요";
+  else if (!isPaid && !isPaying) subtitle = formatPayStart(period.pay_start);
+  else if (isApplying) subtitle = formatApplyEnd(period.apply_end);
+
+  return (
+    <Link href={`/subscription?period=${period.id}`} className="block">
+      <Card className={`transition-colors hover:bg-accent/50 ${isActionable && !isPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
+        <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
+            <UtensilsCrossed className="h-5 w-5 text-green-500" />
+          </div>
+          <div className="flex-1">
+            <CardTitle className="text-base">{title}</CardTitle>
+            {subtitle && (
+              <p className="text-sm text-muted-foreground">{subtitle}</p>
+            )}
+          </div>
+          {isPaid ? (
+            <Badge
+              variant="secondary"
+              className="ml-auto gap-1 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+            >
+              <Check className="h-3 w-3" />
+              결제 완료
+            </Badge>
+          ) : (
+            <Badge
+              variant="secondary"
+              className="ml-auto gap-1 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+            >
+              <Clock className="h-3 w-3" />
+              결제 대기
+            </Badge>
+          )}
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4 text-sm text-muted-foreground">
+            <span>주 {subscription.frequency_per_week}회</span>
+            <span>·</span>
+            <span>배달당 {subscription.salads_per_delivery}개</span>
+            <span>·</span>
+            <span>월 {totalSalads}개</span>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
 
 export function FavoriteItem({
   fav,

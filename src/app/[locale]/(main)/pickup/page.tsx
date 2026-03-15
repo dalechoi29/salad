@@ -1,27 +1,22 @@
-import { getActivePeriod, getMySubscription } from "@/lib/actions/subscription";
+import { getSubscriptionPeriods } from "@/lib/actions/subscription";
 import { getMyPickups } from "@/lib/actions/pickup";
 import { getMyMenuSelections } from "@/lib/actions/menu";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import { PickupView } from "./pickup-view";
 
 export default async function PickupPage() {
-  const period = await getActivePeriod();
+  const allPeriods = await getSubscriptionPeriods();
 
   const today = getKSTDate();
-  const pastStart = new Date(today);
-  pastStart.setDate(pastStart.getDate() - 30);
+  const todayISO = formatDateISO(today);
 
-  const rangeStart = period?.delivery_start
-    ? period.delivery_start < formatDateISO(pastStart)
-      ? period.delivery_start
-      : formatDateISO(pastStart)
-    : formatDateISO(pastStart);
+  let rangeStart = todayISO;
+  let rangeEnd = todayISO;
 
-  const rangeEnd = period?.delivery_end
-    ? period.delivery_end > formatDateISO(today)
-      ? period.delivery_end
-      : formatDateISO(today)
-    : formatDateISO(today);
+  for (const p of allPeriods) {
+    if (p.delivery_start && p.delivery_start < rangeStart) rangeStart = p.delivery_start;
+    if (p.delivery_end && p.delivery_end > rangeEnd) rangeEnd = p.delivery_end;
+  }
 
   const [pickups, selections] = await Promise.all([
     getMyPickups(rangeStart, rangeEnd),

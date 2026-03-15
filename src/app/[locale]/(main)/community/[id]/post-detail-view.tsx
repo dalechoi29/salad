@@ -217,7 +217,7 @@ export function PostDetailView({
             {/* Author & date */}
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="font-medium">
-                {post.profile?.nickname ?? "익명"}
+                익명
               </span>
               <span>·</span>
               <span>{timeAgo(post.created_at)}</span>
@@ -327,7 +327,7 @@ export function PostDetailView({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm">
                       <span className="font-medium">
-                        {comment.profile?.nickname ?? "익명"}
+                        익명
                       </span>
                       <span className="text-muted-foreground">
                         {timeAgo(comment.created_at)}

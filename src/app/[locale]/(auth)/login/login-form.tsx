@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
@@ -15,15 +15,18 @@ export function LoginForm() {
   const t = useTranslations("auth");
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [savedEmail, setSavedEmail] = useState("");
+  const [email, setEmail] = useState("");
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const email = localStorage.getItem("salad_pending_email");
-    if (email) setSavedEmail(email);
+    const saved = localStorage.getItem("salad_pending_email");
+    if (saved) setEmail(saved);
   }, []);
 
   async function handleSubmit(formData: FormData) {
     setIsLoading(true);
+    const submittedEmail = formData.get("email") as string;
+    setEmail(submittedEmail);
 
     try {
       const result = await login(formData);
@@ -45,6 +48,12 @@ export function LoginForm() {
         }
 
         toast.error(message);
+        setTimeout(() => {
+          if (passwordRef.current) {
+            passwordRef.current.value = "";
+            passwordRef.current.focus();
+          }
+        }, 0);
         return;
       }
 
@@ -74,7 +83,8 @@ export function LoginForm() {
               id="email"
               name="email"
               type="email"
-              defaultValue={savedEmail}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               placeholder={t("emailPlaceholder")}
               required
               autoComplete="email"
@@ -83,6 +93,7 @@ export function LoginForm() {
           <div className="space-y-2">
             <Label htmlFor="password">{t("password")}</Label>
             <Input
+              ref={passwordRef}
               id="password"
               name="password"
               type="password"

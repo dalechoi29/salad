@@ -37,7 +37,7 @@ export function formatDateCompact(dateStr: string): string {
 
 export function formatDateFull(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
-  return `${d.getMonth() + 1}/${d.getDate()}(${DAY_NAMES[d.getDay()]}요일)`;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일(${DAY_NAMES[d.getDay()]}요일)`;
 }
 
 export function timeAgo(dateStr: string): string {
