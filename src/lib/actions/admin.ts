@@ -213,14 +213,14 @@ export async function getDashboardStats(
     .from("profiles")
     .select("id")
     .eq("status", "disabled");
-  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
 
   const { data: selections } = await supabase
     .from("user_menu_selections")
     .select("delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
 
   const activeSelections = (selections ?? []).filter(
-    (s) => !disabledUserIds.has(s.user_id)
+    (s: any) => !disabledUserIds.has(s.user_id)
   );
   const totalDeliveries = activeSelections.length;
   const pickupRate = totalDeliveries > 0
@@ -292,7 +292,7 @@ export async function getVendorReport(
     .from("profiles")
     .select("id")
     .eq("status", "disabled");
-  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
 
   const { data: selections } = await supabase
     .from("user_menu_selections")
@@ -304,7 +304,7 @@ export async function getVendorReport(
     .order("delivery_date");
 
   const activeSelections = (selections ?? []).filter(
-    (s) => !disabledUserIds.has(s.user_id)
+    (s: any) => !disabledUserIds.has(s.user_id)
   );
   if (activeSelections.length === 0) return [];
 
@@ -442,7 +442,7 @@ export async function getDeliverySummary(
     .from("profiles")
     .select("id")
     .eq("status", "disabled");
-  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
 
   const { data: selections } = await supabase
     .from("user_menu_selections")
@@ -454,7 +454,7 @@ export async function getDeliverySummary(
     .order("delivery_date");
 
   const activeSelections = (selections ?? []).filter(
-    (s) => !disabledUserIds.has(s.user_id)
+    (s: any) => !disabledUserIds.has(s.user_id)
   );
   if (activeSelections.length === 0) return [];
 
@@ -518,10 +518,10 @@ export async function getSubscriptionDayCounts(
     .select("id")
     .eq("status", "disabled");
   const disabledUserIds = new Set(
-    (disabledProfiles ?? []).map((p) => p.id)
+    (disabledProfiles ?? []).map((p: any) => p.id)
   );
 
-  const subIds = subscriptions.map((s) => s.id);
+  const subIds = subscriptions.map((s: any) => s.id);
 
   const { data: deliveryDays } = await supabase
     .from("delivery_days")
@@ -565,11 +565,11 @@ export async function getSubscribersForDate(
     .select("id")
     .eq("status", "disabled");
   const disabledUserIds = new Set(
-    (disabledProfiles ?? []).map((p) => p.id)
+    (disabledProfiles ?? []).map((p: any) => p.id)
   );
 
-  const subIds = subscriptions.map((s) => s.id);
-  const subUserMap = new Map(subscriptions.map((s) => [s.id, s.user_id]));
+  const subIds = subscriptions.map((s: any) => s.id);
+  const subUserMap = new Map(subscriptions.map((s: any) => [s.id, s.user_id]));
 
   const { data: deliveryDays } = await supabase
     .from("delivery_days")
@@ -601,7 +601,7 @@ export async function getSubscribersForDate(
     .select("id, real_name")
     .in("id", uniqueIds);
 
-  return (profiles ?? []).map((p) => ({
+  return (profiles ?? []).map((p: any) => ({
     userId: p.id,
     realName: p.real_name || "이름 없음",
   }));

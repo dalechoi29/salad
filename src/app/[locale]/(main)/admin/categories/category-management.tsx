@@ -268,7 +268,7 @@ export function CategoryManagement({
             </div>
             <div className="space-y-2">
               <Label>색상</Label>
-              <Select value={color} onValueChange={setColor}>
+              <Select value={color} onValueChange={(v) => v && setColor(v)}>
                 <SelectTrigger>
                   <span className="flex flex-1 text-left">{COLOR_PRESETS.find((p) => p.value === color)?.label ?? "색상 선택"}</span>
                 </SelectTrigger>
