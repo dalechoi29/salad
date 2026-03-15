@@ -17,7 +17,7 @@ export default async function MainLayout({
         <DesktopSidebar />
         <div className="md:pl-64">
           <Header />
-          <main className="px-4 py-6 pb-20 md:px-6 md:pb-6">{children}</main>
+          <main className="px-4 py-6 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-6 md:pb-6">{children}</main>
         </div>
         <BottomNav />
       </div>

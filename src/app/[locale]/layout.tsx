@@ -1,3 +1,4 @@
+import type { Viewport } from "next";
 import { NextIntlClientProvider, hasLocale } from "next-intl";
 import { getMessages } from "next-intl/server";
 import { notFound } from "next/navigation";
@@ -7,6 +8,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { RouteProgress } from "@/components/layout/route-progress";
 import { routing } from "@/i18n/routing";
+
+export const viewport: Viewport = {
+  viewportFit: "cover",
+};
 
 const geistSans = Geist({
   variable: "--font-sans",
