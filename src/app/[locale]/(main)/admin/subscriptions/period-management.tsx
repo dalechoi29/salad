@@ -116,7 +116,7 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
       const data = await getSubscriptionsByPeriod(periodId);
       setSubscribers(data);
     } catch {
-      toast.error("Failed to load subscribers");
+      toast.error("구독자 목록을 불러오지 못했어요");
     } finally {
       setLoadingSubscribers(false);
     }

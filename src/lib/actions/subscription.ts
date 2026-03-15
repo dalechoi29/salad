@@ -120,7 +120,7 @@ export async function cancelSubscription(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("subscriptions")
@@ -230,7 +230,7 @@ export async function createOrUpdateSubscription(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: period } = await supabase
     .from("subscription_periods")
@@ -308,7 +308,7 @@ export async function updatePaymentAndMarkPaid(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("subscriptions")
@@ -336,7 +336,7 @@ export async function updatePaymentMethod(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("subscriptions")

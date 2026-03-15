@@ -1,5 +1,4 @@
 import { ThemeToggle } from "@/components/layout/theme-toggle";
-import { LanguageToggle } from "@/components/layout/language-toggle";
 
 export default function AuthLayout({
   children,
@@ -9,7 +8,6 @@ export default function AuthLayout({
   return (
     <div className="relative flex h-screen overflow-hidden">
       <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-        <LanguageToggle />
         <ThemeToggle />
       </div>
 

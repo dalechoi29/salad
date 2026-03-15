@@ -34,56 +34,41 @@ import {
   updatePost,
   getComments,
 } from "@/lib/actions/community";
+import { handleActionError } from "@/lib/handle-action-error";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { timeAgo } from "@/lib/utils";
-import type { Post, Comment, Vote, PostCategory } from "@/types";
-
-const CATEGORY_OPTIONS: { value: PostCategory; label: string }[] = [
-  { value: "general", label: "자유" },
-  { value: "ceo", label: "사장님께 한마디" },
-  { value: "preference", label: "메뉴 취향" },
-  { value: "tip", label: "꿀팁" },
-  { value: "etc", label: "기타" },
-];
-
-const CATEGORY_LABELS: Record<string, string> = {
-  general: "자유",
-  ceo: "사장님께 한마디",
-  preference: "메뉴 취향",
-  tip: "꿀팁",
-  etc: "기타",
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  general: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  ceo: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  preference: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  tip: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  etc: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-};
+import type { Post, Comment, Vote, PostCategory, CommunityCategory } from "@/types";
 
 interface PostDetailViewProps {
   post: Post;
   initialComments: Comment[];
   initialVote: Vote | null;
+  categories: CommunityCategory[];
 }
 
 export function PostDetailView({
   post,
   initialComments,
   initialVote,
+  categories,
 }: PostDetailViewProps) {
   const router = useRouter();
   const { user } = useUser();
   const isOwner = user?.id === post.user_id;
   const isAdmin = user?.role === "admin";
+
+  const categoryLabels: Record<string, string> = {};
+  const categoryColors: Record<string, string> = {};
+  for (const cat of categories) {
+    categoryLabels[cat.key] = cat.label;
+    categoryColors[cat.key] = cat.color;
+  }
 
   const [comments, setComments] = useState(initialComments);
   const [myVote, setMyVote] = useState<Vote | null>(initialVote);
@@ -105,6 +90,7 @@ export function PostDetailView({
     try {
       const result = await vote(post.id, value);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -127,6 +113,7 @@ export function PostDetailView({
     try {
       const result = await createComment(post.id, commentText);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -141,6 +128,7 @@ export function PostDetailView({
   async function handleDeleteComment(commentId: string) {
     const result = await deleteComment(commentId, post.id);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -151,6 +139,7 @@ export function PostDetailView({
   async function handleDeletePost() {
     const result = await deletePost(post.id);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -163,6 +152,7 @@ export function PostDetailView({
     try {
       const result = await updatePost(post.id, editTitle, editContent, editCategory);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -246,9 +236,9 @@ export function PostDetailView({
             {/* Category tag below content */}
             <Badge
               variant="secondary"
-              className={`w-fit text-sm ${CATEGORY_COLORS[displayCategory] ?? ""}`}
+              className={`w-fit text-sm ${categoryColors[displayCategory] ?? ""}`}
             >
-              {CATEGORY_LABELS[displayCategory] ?? displayCategory}
+              {categoryLabels[displayCategory] ?? displayCategory}
             </Badge>
 
             {/* Vote buttons — icon-only, bigger */}
@@ -378,11 +368,11 @@ export function PostDetailView({
                 onValueChange={(v) => setEditCategory((v ?? "general") as PostCategory)}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <span className="flex flex-1 text-left">{categoryLabels[editCategory] ?? editCategory}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORY_OPTIONS.map((cat) => (
-                    <SelectItem key={cat.value} value={cat.value}>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.key} value={cat.key} label={cat.label}>
                       {cat.label}
                     </SelectItem>
                   ))}

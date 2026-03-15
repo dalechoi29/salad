@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "@/i18n/navigation";
 import { toggleFavorite, getMyFavorites } from "@/lib/actions/menu";
+import { handleActionError } from "@/lib/handle-action-error";
 import { getReviewsForMenu, deleteReview } from "@/lib/actions/review";
 import { useUser } from "@/components/providers/user-provider";
 import { ReviewEditDialog } from "@/components/shared/review-edit-dialog";
@@ -60,6 +61,7 @@ export function MenuDetail({ menu }: { menu: Menu }) {
   async function handleToggleFavorite() {
     const result = await toggleFavorite(menu.id);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -70,6 +72,7 @@ export function MenuDetail({ menu }: { menu: Menu }) {
   async function handleDeleteReview(reviewId: string) {
     const result = await deleteReview(reviewId);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }

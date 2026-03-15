@@ -55,7 +55,7 @@ export async function createPost(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const trimmedTitle = title.trim();
   const trimmedContent = content.trim();
@@ -91,7 +91,7 @@ export async function updatePost(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const updateData: Record<string, unknown> = {
     title: title.trim(),
@@ -119,7 +119,7 @@ export async function deletePost(postId: string): Promise<ActionResult> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("posts")
@@ -172,7 +172,7 @@ export async function createComment(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const trimmed = content.trim();
   if (!trimmed) return { error: "댓글을 입력해주세요" };
@@ -199,7 +199,7 @@ export async function deleteComment(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("comments")
@@ -242,7 +242,7 @@ export async function vote(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: existing } = await supabase
     .from("votes")

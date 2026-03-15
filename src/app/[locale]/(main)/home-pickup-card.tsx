@@ -5,8 +5,9 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2 } from "lucide-react";
 import { confirmPickup } from "@/lib/actions/pickup";
+import { handleActionError } from "@/lib/handle-action-error";
 import { toast } from "sonner";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 
 interface HomePickupCardProps {
   todayStr: string;
@@ -23,12 +24,14 @@ export function HomePickupCard({
 }: HomePickupCardProps) {
   const [confirmed, setConfirmed] = useState(initialConfirmed);
   const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
 
   async function handleConfirm() {
     setIsLoading(true);
     try {
       const result = await confirmPickup(todayStr);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }

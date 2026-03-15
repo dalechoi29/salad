@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, UtensilsCrossed, Salad, User } from "lucide-react";
+import { Home, UtensilsCrossed, Salad, Leaf, User } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, usePathname } from "@/i18n/navigation";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,7 @@ const navItems = [
   { href: "/", icon: Home, labelKey: "home" as const },
   { href: "/menu", icon: UtensilsCrossed, labelKey: "menu" as const },
   { href: "/pickup", icon: Salad, labelKey: "mySalad" as const },
+  { href: "/community", icon: Leaf, labelKey: "community" as const },
   { href: "/my", icon: User, labelKey: "myPage" as const },
 ];
 
@@ -30,7 +31,7 @@ export function BottomNav() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex flex-col items-center gap-1 px-3 py-2 text-xs transition-colors",
+                "flex flex-col items-center gap-1 px-2 py-2 text-xs transition-colors",
                 isActive
                   ? "text-primary"
                   : "text-muted-foreground hover:text-foreground"

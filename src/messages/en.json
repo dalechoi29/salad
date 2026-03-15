@@ -23,7 +23,7 @@
     "pickup": "Pickup",
     "mySalad": "My Salad",
     "community": "Bamboo Forest",
-    "myPage": "My Page",
+    "myPage": "My Space",
     "admin": "Admin"
   },
   "auth": {
@@ -107,7 +107,7 @@
     "noPost": "No posts yet"
   },
   "myPage": {
-    "title": "My Page",
+    "title": "My Space",
     "accountSettings": "Account Settings",
     "subscriptionOverview": "Subscription Overview",
     "menuCalendar": "Menu Calendar",

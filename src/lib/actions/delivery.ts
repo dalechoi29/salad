@@ -34,7 +34,7 @@ export async function saveDeliveryDays(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: subscription } = await supabase
     .from("subscriptions")
@@ -96,7 +96,7 @@ export async function bulkSaveDeliveryDays(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: subscription } = await supabase
     .from("subscriptions")

@@ -13,7 +13,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Star, ImagePlus, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { updateReview } from "@/lib/actions/review";
+import { handleActionError } from "@/lib/handle-action-error";
 import { createClient } from "@/lib/supabase/client";
+import { useRouter } from "@/i18n/navigation";
 import type { Review } from "@/types";
 
 interface ReviewEditDialogProps {
@@ -29,6 +31,7 @@ export function ReviewEditDialog({
   onOpenChange,
   onUpdated,
 }: ReviewEditDialogProps) {
+  const router = useRouter();
   const [rating, setRating] = useState(review?.rating ?? 5);
   const [comment, setComment] = useState(review?.comment ?? "");
   const [imageUrl, setImageUrl] = useState<string | null>(
@@ -87,6 +90,7 @@ export function ReviewEditDialog({
     try {
       const result = await updateReview(review.id, rating, comment, imageUrl);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }

@@ -29,21 +29,19 @@ import {
 } from "@/lib/actions/admin";
 
 import { timeAgo } from "@/lib/utils";
-
-const CATEGORY_LABELS: Record<string, string> = {
-  general: "자유",
-  ceo: "사장님께 한마디",
-  preference: "메뉴 취향",
-  tip: "꿀팁",
-  etc: "기타",
-};
+import type { CommunityCategory } from "@/types";
 
 interface ModerationViewProps {
   initialPosts: any[];
   initialTotal: number;
+  categories: CommunityCategory[];
 }
 
-export function ModerationView({ initialPosts, initialTotal }: ModerationViewProps) {
+export function ModerationView({ initialPosts, initialTotal, categories }: ModerationViewProps) {
+  const CATEGORY_LABELS: Record<string, string> = {};
+  for (const cat of categories) {
+    CATEGORY_LABELS[cat.key] = cat.label;
+  }
   const [posts, setPosts] = useState(initialPosts);
   const [total, setTotal] = useState(initialTotal);
   const [detailPost, setDetailPost] = useState<any | null>(null);

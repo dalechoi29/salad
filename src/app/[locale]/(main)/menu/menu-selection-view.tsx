@@ -20,7 +20,7 @@ import {
   Loader2,
   CalendarDays,
 } from "lucide-react";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { formatDateShort } from "@/lib/utils";
 import type { DailyMenu, MenuSelection, DietaryPreference } from "@/types";
 import {
@@ -30,6 +30,7 @@ import {
   toggleFavorite,
   getMyFavorites,
 } from "@/lib/actions/menu";
+import { handleActionError } from "@/lib/handle-action-error";
 
 const DIETARY_LABELS: Record<string, string> = {
   vegan: "비건",
@@ -97,6 +98,7 @@ export function MenuSelectionView({
   const [loading, setLoading] = useState(true);
   const [selectingDate, setSelectingDate] = useState<string | null>(null);
 
+  const router = useRouter();
   const allWeekdays =
     deliveryStart && deliveryEnd
       ? getWeekdaysBetween(deliveryStart, deliveryEnd)
@@ -186,6 +188,7 @@ export function MenuSelectionView({
     try {
       const result = await selectMenu(dailyMenuId, dateStr);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -214,6 +217,7 @@ export function MenuSelectionView({
   async function handleToggleFavorite(menuId: string) {
     const result = await toggleFavorite(menuId);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }

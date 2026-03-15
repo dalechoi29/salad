@@ -129,7 +129,16 @@ export interface Review {
   menu?: Pick<Menu, "id" | "title" | "image_url">;
 }
 
-export type PostCategory = "general" | "ceo" | "preference" | "tip" | "etc";
+export type PostCategory = string;
+
+export interface CommunityCategory {
+  id: string;
+  key: string;
+  label: string;
+  color: string;
+  sort_order: number;
+  created_at: string;
+}
 
 export interface Post {
   id: string;

@@ -31,10 +31,10 @@ export function LoginForm() {
       if (result.error) {
         const errorMessages: Record<string, string> = {
           INVALID_PASSWORD_FORMAT: t("passwordPlaceholder"),
-          INVALID_CREDENTIALS: "Invalid email or password",
+          INVALID_CREDENTIALS: "이메일이나 비밀번호를 다시 확인해주세요.",
           PENDING_APPROVAL: t("pendingApproval"),
-          ACCOUNT_DISABLED: "Account has been disabled",
-          PROFILE_NOT_FOUND: "Profile not found",
+          ACCOUNT_DISABLED: "계정이 비활성화 되었어요.",
+          PROFILE_NOT_FOUND: "프로필을 찾을 수 없어요.",
         };
 
         const message = errorMessages[result.error] || result.error;

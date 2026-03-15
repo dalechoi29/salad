@@ -16,14 +16,18 @@ import {
   getActivePeriod,
   getMySubscription,
   getMySubscriptions,
+  getSubscriptionPeriods,
 } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { deliveryDaysToDateStrings, getTodayStr, countSelectedDays, formatDateFull } from "@/lib/utils";
 import { getDailyMenusByDate, getMyMenuSelections } from "@/lib/actions/menu";
 import { getPickupStreak, getMyPickups } from "@/lib/actions/pickup";
+import { getSubscriptionDayCounts } from "@/lib/actions/admin";
+import { getHolidays } from "@/lib/actions/holiday";
 import { Link } from "@/i18n/navigation";
 import { HomePickupCard } from "./home-pickup-card";
-import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod } from "@/types";
+import { SubscriptionStatusView } from "./admin/subscription-status/subscription-status-view";
+import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod, Holiday } from "@/types";
 
 function findCurrentSubscription(
   subscriptions: Subscription[],
@@ -97,9 +101,45 @@ export default async function HomePage() {
       ? (todaySelections[0].daily_menu_assignment as any)?.menu?.title ?? null
       : null;
 
+  const isAdmin = profile?.role === "admin";
+
+  let subStatusProps: {
+    currentPeriod: SubscriptionPeriod | null;
+    nextPeriod: SubscriptionPeriod | null;
+    currentCounts: Record<string, number>;
+    nextCounts: Record<string, number>;
+    holidays: Holiday[];
+  } | null = null;
+
+  if (profile) {
+    const allPeriods = await getSubscriptionPeriods();
+    const now = new Date();
+    const cm = now.getMonth() + 1;
+    const cy = now.getFullYear();
+    const nm = cm === 12 ? 1 : cm + 1;
+    const ny = cm === 12 ? cy + 1 : cy;
+    const curMonthStr = `${cy}년 ${cm}월`;
+    const nxtMonthStr = `${ny}년 ${nm}월`;
+    const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
+    const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
+    const [cc, nc, hols] = await Promise.all([
+      curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
+      nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
+      getHolidays(),
+    ]);
+    subStatusProps = {
+      currentPeriod: curPeriod,
+      nextPeriod: nxtPeriod,
+      currentCounts: cc,
+      nextCounts: nc,
+      holidays: hols,
+    };
+  }
+
   return (
     <HomeContent
       isLoggedIn={!!profile}
+      isAdmin={isAdmin}
       nickname={profile?.nickname ?? ""}
       period={period}
       subscription={subscription}
@@ -114,6 +154,7 @@ export default async function HomePage() {
       nextDeliveryMenus={nextDeliveryMenus}
       nextDeliverySelection={nextDeliverySelection}
       todaySelectedMenuName={todaySelectedMenuName}
+      subStatusProps={subStatusProps}
     />
   );
 }
@@ -129,6 +170,7 @@ const DIETARY_LABELS: Record<string, string> = {
 
 function HomeContent({
   isLoggedIn,
+  isAdmin,
   nickname,
   period,
   subscription,
@@ -143,8 +185,10 @@ function HomeContent({
   nextDeliveryMenus,
   nextDeliverySelection,
   todaySelectedMenuName,
+  subStatusProps,
 }: {
   isLoggedIn: boolean;
+  isAdmin: boolean;
   nickname: string;
   period: any;
   subscription: any;
@@ -159,6 +203,13 @@ function HomeContent({
   nextDeliveryMenus: DailyMenu[];
   nextDeliverySelection: MenuSelection | null;
   todaySelectedMenuName: string | null;
+  subStatusProps: {
+    currentPeriod: SubscriptionPeriod | null;
+    nextPeriod: SubscriptionPeriod | null;
+    currentCounts: Record<string, number>;
+    nextCounts: Record<string, number>;
+    holidays: Holiday[];
+  } | null;
 }) {
   const t = useTranslations("home");
   const tSub = useTranslations("subscription");
@@ -383,6 +434,22 @@ function HomeContent({
             </CardHeader>
           </Card>
         </Link>
+      )}
+
+      {/* Subscription Status */}
+      {isLoggedIn && subStatusProps && (
+        <div className="pt-2">
+          <SubscriptionStatusView
+            currentPeriod={subStatusProps.currentPeriod}
+            nextPeriod={subStatusProps.nextPeriod}
+            currentCounts={subStatusProps.currentCounts}
+            nextCounts={subStatusProps.nextCounts}
+            holidays={subStatusProps.holidays}
+            showBackButton={false}
+            showTitle
+            isAdmin={isAdmin}
+          />
+        </div>
       )}
 
       {/* Show subscription card at bottom if not in actionable period or already paid */}

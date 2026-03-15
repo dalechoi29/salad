@@ -23,7 +23,7 @@
     "pickup": "수령",
     "mySalad": "내 샐러드",
     "community": "대나무숲",
-    "myPage": "마이페이지",
+    "myPage": "내 공간",
     "admin": "관리자"
   },
   "auth": {
@@ -107,7 +107,7 @@
     "noPost": "아직 게시글이 없습니다"
   },
   "myPage": {
-    "title": "마이페이지",
+    "title": "내 공간",
     "accountSettings": "계정 설정",
     "subscriptionOverview": "구독 현황",
     "menuCalendar": "메뉴 캘린더",

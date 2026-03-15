@@ -206,7 +206,7 @@ export async function selectMenu(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: existing } = await supabase
     .from("user_menu_selections")
@@ -245,7 +245,7 @@ export async function removeMenuSelection(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("user_menu_selections")
@@ -284,7 +284,7 @@ export async function toggleFavorite(menuId: string): Promise<ActionResult & { f
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: existing } = await supabase
     .from("menu_favorites")

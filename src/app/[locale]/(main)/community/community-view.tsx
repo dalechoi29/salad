@@ -18,7 +18,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import {
   MessageSquare,
@@ -33,36 +32,13 @@ import { Link } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { createPost, getPosts, vote } from "@/lib/actions/community";
+import { handleActionError } from "@/lib/handle-action-error";
 import { useRouter } from "@/i18n/navigation";
 import { timeAgo } from "@/lib/utils";
-import type { Post, PostCategory } from "@/types";
+import type { Post, PostCategory, CommunityCategory } from "@/types";
 
-const CATEGORIES: { value: "all" | PostCategory; label: string }[] = [
-  { value: "all", label: "전체" },
-  { value: "general", label: "자유" },
-  { value: "ceo", label: "사장님께 한마디" },
-  { value: "preference", label: "메뉴 취향" },
-  { value: "tip", label: "꿀팁" },
-  { value: "etc", label: "기타" },
-];
-
-const CATEGORY_LABELS: Record<string, string> = {
-  general: "자유",
-  ceo: "사장님께 한마디",
-  preference: "메뉴 취향",
-  tip: "꿀팁",
-  etc: "기타",
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  general: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  ceo: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  preference: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  tip: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  etc: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-};
-
-function PostCard({ post, onVoteChange }: { post: Post; onVoteChange: (id: string, newCount: number) => void }) {
+function PostCard({ post, onVoteChange, categoryLabels, categoryColors }: { post: Post; onVoteChange: (id: string, newCount: number) => void; categoryLabels: Record<string, string>; categoryColors: Record<string, string> }) {
+  const router = useRouter();
   const [liked, setLiked] = useState(false);
   const [voteCount, setVoteCount] = useState(post.vote_count);
   const [isVoting, setIsVoting] = useState(false);
@@ -75,6 +51,7 @@ function PostCard({ post, onVoteChange }: { post: Post; onVoteChange: (id: strin
     try {
       const result = await vote(post.id, 1);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -95,14 +72,14 @@ function PostCard({ post, onVoteChange }: { post: Post; onVoteChange: (id: strin
     : "";
 
   return (
-    <Link href={`/community/${post.id}`}>
+    <Link href={`/community/${post.id}`} className="block">
       <Card className="transition-colors hover:bg-accent/50">
         <CardContent className="px-6 py-2">
           <Badge
             variant="secondary"
-            className={`mb-1.5 w-fit text-xs ${CATEGORY_COLORS[post.category] ?? ""}`}
+            className={`mb-1.5 w-fit text-xs ${categoryColors[post.category] ?? ""}`}
           >
-            {CATEGORY_LABELS[post.category] ?? post.category}
+            {categoryLabels[post.category] ?? post.category}
           </Badge>
           <p className="text-lg font-semibold leading-snug">
             {post.title}
@@ -140,24 +117,36 @@ function PostCard({ post, onVoteChange }: { post: Post; onVoteChange: (id: strin
 
 interface CommunityViewProps {
   initialPosts: Post[];
+  categories: CommunityCategory[];
 }
 
-export function CommunityView({ initialPosts }: CommunityViewProps) {
+export function CommunityView({ initialPosts, categories }: CommunityViewProps) {
   const t = useTranslations("community");
   const router = useRouter();
   const [posts, setPosts] = useState(initialPosts);
   const [sort, setSort] = useState<"newest" | "popular">("newest");
-  const [activeCategory, setActiveCategory] = useState<"all" | PostCategory>("all");
+  const [activeCategory, setActiveCategory] = useState<string>("all");
   const [isLoading, setIsLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [postCategory, setPostCategory] = useState<PostCategory>("general");
+  const [postCategory, setPostCategory] = useState<PostCategory>(categories[0]?.key ?? "general");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const categoryLabels: Record<string, string> = {};
+  const categoryColors: Record<string, string> = {};
+  for (const cat of categories) {
+    categoryLabels[cat.key] = cat.label;
+    categoryColors[cat.key] = cat.color;
+  }
+  const filterTabs: { value: string; label: string }[] = [
+    { value: "all", label: "전체" },
+    ...categories.map((c) => ({ value: c.key, label: c.label })),
+  ];
 
   async function reload(
     newSort: "newest" | "popular" = sort,
-    newCategory: "all" | PostCategory = activeCategory
+    newCategory: string = activeCategory
   ) {
     setIsLoading(true);
     try {
@@ -177,7 +166,7 @@ export function CommunityView({ initialPosts }: CommunityViewProps) {
     await reload(newSort, activeCategory);
   }
 
-  async function handleCategoryChange(cat: "all" | PostCategory) {
+  async function handleCategoryChange(cat: string) {
     if (cat === activeCategory) return;
     setActiveCategory(cat);
     await reload(sort, cat);
@@ -188,6 +177,7 @@ export function CommunityView({ initialPosts }: CommunityViewProps) {
     try {
       const result = await createPost(title, content, postCategory);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -219,7 +209,7 @@ export function CommunityView({ initialPosts }: CommunityViewProps) {
 
       {/* Category tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-1">
-        {CATEGORIES.map((cat) => (
+        {filterTabs.map((cat) => (
           <Button
             key={cat.value}
             variant={activeCategory === cat.value ? "default" : "outline"}
@@ -266,9 +256,9 @@ export function CommunityView({ initialPosts }: CommunityViewProps) {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-4">
           {posts.map((post) => (
-            <PostCard key={post.id} post={post} onVoteChange={(id, newCount) => {
+            <PostCard key={post.id} post={post} categoryLabels={categoryLabels} categoryColors={categoryColors} onVoteChange={(id, newCount) => {
               setPosts((prev) => prev.map((p) => p.id === id ? { ...p, vote_count: newCount } : p));
             }} />
           ))}
@@ -288,11 +278,11 @@ export function CommunityView({ initialPosts }: CommunityViewProps) {
                 onValueChange={(v) => setPostCategory((v ?? "general") as PostCategory)}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <span className="flex flex-1 text-left">{categoryLabels[postCategory] ?? postCategory}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.filter((c) => c.value !== "all").map((cat) => (
-                    <SelectItem key={cat.value} value={cat.value}>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.key} value={cat.key} label={cat.label}>
                       {cat.label}
                     </SelectItem>
                   ))}

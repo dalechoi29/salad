@@ -11,7 +11,7 @@ export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: existing } = await supabase
     .from("pickups")
@@ -51,7 +51,7 @@ export async function undoPickup(pickupDate: string): Promise<ActionResult> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("pickups")

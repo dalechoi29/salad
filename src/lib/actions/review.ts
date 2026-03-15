@@ -16,7 +16,7 @@ export async function createReview(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   if (rating < 1 || rating > 5) return { error: "평점은 1~5 사이여야 합니다" };
 
@@ -47,7 +47,7 @@ export async function updateReview(
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("reviews")
@@ -72,7 +72,7 @@ export async function deleteReview(reviewId: string): Promise<ActionResult> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
     .from("reviews")

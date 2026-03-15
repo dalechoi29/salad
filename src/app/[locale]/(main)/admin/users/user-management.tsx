@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
 import {
   Card,
   CardContent,
@@ -25,6 +24,7 @@ import {
 import {
   approveUser,
   disableUser,
+  enableUser,
   addAllowedDomain,
   removeAllowedDomain,
 } from "@/lib/actions/admin";
@@ -38,6 +38,7 @@ import {
   Trash2,
   Loader2,
   ArrowLeft,
+  UserPlus,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import type { Profile, AllowedDomain } from "@/types";
@@ -46,6 +47,12 @@ interface UserManagementProps {
   initialUsers: Profile[];
   initialDomains: AllowedDomain[];
 }
+
+const statusLabels: Record<string, string> = {
+  pending: "승인 대기",
+  approved: "승인됨",
+  disabled: "비활성화",
+};
 
 const statusColors: Record<string, string> = {
   pending: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
@@ -57,7 +64,6 @@ export function UserManagement({
   initialUsers,
   initialDomains,
 }: UserManagementProps) {
-  const t = useTranslations("nav");
   const [users, setUsers] = useState(initialUsers);
   const [domains, setDomains] = useState(initialDomains);
   const [newDomain, setNewDomain] = useState("");
@@ -66,7 +72,7 @@ export function UserManagement({
 
   async function handleApprove(userId: string) {
     if (!approvePassword || approvePassword.length !== 4) {
-      toast.error("Please enter a 4-digit password");
+      toast.error("4자리 비밀번호를 입력해주세요");
       return;
     }
 
@@ -79,7 +85,7 @@ export function UserManagement({
       return;
     }
 
-    toast.success("User approved");
+    toast.success("사용자가 승인되었습니다");
     setUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, status: "approved" as const } : u))
     );
@@ -96,9 +102,25 @@ export function UserManagement({
       return;
     }
 
-    toast.success("User disabled");
+    toast.success("사용자가 비활성화되었습니다");
     setUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, status: "disabled" as const } : u))
+    );
+  }
+
+  async function handleEnable(userId: string) {
+    setLoadingId(userId);
+    const result = await enableUser(userId);
+    setLoadingId(null);
+
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+
+    toast.success("사용자가 다시 활성화되었습니다");
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, status: "approved" as const } : u))
     );
   }
 
@@ -111,7 +133,7 @@ export function UserManagement({
       return;
     }
 
-    toast.success("Domain added");
+    toast.success("도메인이 추가되었습니다");
     setNewDomain("");
     setDomains((prev) => [
       ...prev,
@@ -126,12 +148,13 @@ export function UserManagement({
       return;
     }
 
-    toast.success("Domain removed");
+    toast.success("도메인이 삭제되었습니다");
     setDomains((prev) => prev.filter((d) => d.id !== id));
   }
 
   const pendingUsers = users.filter((u) => u.status === "pending");
-  const otherUsers = users.filter((u) => u.status !== "pending");
+  const activeUsers = users.filter((u) => u.status === "approved");
+  const disabledUsers = users.filter((u) => u.status === "disabled");
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -140,7 +163,7 @@ export function UserManagement({
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <Shield className="h-5 w-5" />
-        <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
+        <h1 className="text-2xl font-bold tracking-tight">사용자 관리</h1>
       </div>
 
       {/* Allowed Domains */}
@@ -148,20 +171,20 @@ export function UserManagement({
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Globe className="h-4 w-4" />
-            Allowed Email Domains
+            허용 이메일 도메인
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex gap-2">
             <Input
-              placeholder="e.g. company.com"
+              placeholder="예: company.com"
               value={newDomain}
               onChange={(e) => setNewDomain(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAddDomain()}
             />
             <Button size="sm" onClick={handleAddDomain}>
               <Plus className="mr-1 h-4 w-4" />
-              Add
+              추가
             </Button>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -190,7 +213,7 @@ export function UserManagement({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <UserCheck className="h-4 w-4" />
-              Pending Approval ({pendingUsers.length})
+              승인 대기 ({pendingUsers.length})
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 p-0">
@@ -203,7 +226,7 @@ export function UserManagement({
                       {user.email}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Nickname: {user.nickname}
+                      닉네임: {user.nickname}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -212,13 +235,13 @@ export function UserManagement({
                         render={<Button size="sm" variant="default" />}
                       >
                         <UserCheck className="mr-1 h-4 w-4" />
-                        Approve
+                        승인
                       </DialogTrigger>
                       <DialogContent>
                         <DialogHeader>
-                          <DialogTitle>Approve {user.real_name}</DialogTitle>
+                          <DialogTitle>{user.real_name} 승인</DialogTitle>
                           <DialogDescription>
-                            Assign a 4-digit password for {user.email}
+                            {user.email}에 4자리 비밀번호를 지정해주세요
                           </DialogDescription>
                         </DialogHeader>
                         <Input
@@ -226,7 +249,7 @@ export function UserManagement({
                           inputMode="numeric"
                           pattern="\d{4}"
                           maxLength={4}
-                          placeholder="4-digit password"
+                          placeholder="4자리 비밀번호"
                           value={approvePassword}
                           onChange={(e) =>
                             setApprovePassword(
@@ -236,7 +259,7 @@ export function UserManagement({
                         />
                         <DialogFooter>
                           <DialogClose render={<Button variant="outline" />}>
-                            Cancel
+                            취소
                           </DialogClose>
                           <Button
                             onClick={() => handleApprove(user.id)}
@@ -248,7 +271,7 @@ export function UserManagement({
                             {loadingId === user.id && (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             )}
-                            Approve
+                            승인
                           </Button>
                         </DialogFooter>
                       </DialogContent>
@@ -262,13 +285,16 @@ export function UserManagement({
         </Card>
       )}
 
-      {/* All Users */}
+      {/* Active Users */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">All Users ({users.length})</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <UserCheck className="h-4 w-4" />
+            활성 사용자 ({activeUsers.length})
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 p-0">
-          {otherUsers.map((user, index) => (
+          {activeUsers.map((user, index) => (
             <div key={user.id}>
               <div className="flex items-center justify-between px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -276,7 +302,7 @@ export function UserManagement({
                     <p className="font-medium">{user.real_name}</p>
                     {user.role === "admin" && (
                       <Badge variant="default" className="text-xs">
-                        Admin
+                        관리자
                       </Badge>
                     )}
                   </div>
@@ -286,32 +312,86 @@ export function UserManagement({
                 </div>
                 <div className="flex items-center gap-2">
                   <span
-                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[user.status]}`}
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColors.approved}`}
                   >
-                    {user.status}
+                    {statusLabels.approved}
                   </span>
-                  {user.status === "approved" && user.role !== "admin" && (
+                  {user.role !== "admin" && (
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => handleDisable(user.id)}
                       disabled={loadingId === user.id}
+                      title="비활성화"
                     >
-                      <UserX className="h-4 w-4" />
+                      {loadingId === user.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <UserX className="h-4 w-4" />
+                      )}
                     </Button>
                   )}
                 </div>
               </div>
-              {index < otherUsers.length - 1 && <Separator />}
+              {index < activeUsers.length - 1 && <Separator />}
             </div>
           ))}
-          {otherUsers.length === 0 && (
+          {activeUsers.length === 0 && (
             <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              No approved or disabled users yet
+              활성 사용자가 없습니다
             </p>
           )}
         </CardContent>
       </Card>
+
+      {/* Disabled Users */}
+      {disabledUsers.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <UserX className="h-4 w-4" />
+              비활성화된 사용자 ({disabledUsers.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 p-0">
+            {disabledUsers.map((user, index) => (
+              <div key={user.id}>
+                <div className="flex items-center justify-between px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-muted-foreground">{user.real_name}</p>
+                    </div>
+                    <p className="truncate text-sm text-muted-foreground">
+                      {user.email}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColors.disabled}`}
+                    >
+                      {statusLabels.disabled}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleEnable(user.id)}
+                      disabled={loadingId === user.id}
+                    >
+                      {loadingId === user.id ? (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                      ) : (
+                        <UserPlus className="mr-1 h-4 w-4" />
+                      )}
+                      활성화
+                    </Button>
+                  </div>
+                </div>
+                {index < disabledUsers.length - 1 && <Separator />}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

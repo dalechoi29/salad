@@ -25,7 +25,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
@@ -352,11 +351,11 @@ export function MenuManagement({ initialMenus }: { initialMenus: Menu[] }) {
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <span className="flex flex-1 text-left">{CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label ?? form.category}</span>
                     </SelectTrigger>
                     <SelectContent>
                       {CATEGORY_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
+                        <SelectItem key={opt.value} value={opt.value} label={opt.label}>
                           {opt.label}
                         </SelectItem>
                       ))}

@@ -54,6 +54,32 @@ export async function disableUser(userId: string): Promise<ActionResult> {
   return { success: true };
 }
 
+export async function enableUser(userId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .single();
+
+  if (adminProfile?.role !== "admin") {
+    return { error: "권한이 없습니다" };
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ status: "approved" })
+    .eq("id", userId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin/users");
+  return { success: true };
+}
+
 export async function getAllUsers() {
   const supabase = await createClient();
 
@@ -183,11 +209,20 @@ export async function getDashboardStats(
     .select("*", { count: "exact", head: true })
     .eq("confirmed", true);
 
+  const { data: disabledProfiles } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("status", "disabled");
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+
   const { data: selections } = await supabase
     .from("user_menu_selections")
-    .select("delivery_date, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
+    .select("delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
 
-  const totalDeliveries = selections?.length ?? 0;
+  const activeSelections = (selections ?? []).filter(
+    (s) => !disabledUserIds.has(s.user_id)
+  );
+  const totalDeliveries = activeSelections.length;
   const pickupRate = totalDeliveries > 0
     ? Math.round(((totalPickups ?? 0) / totalDeliveries) * 100)
     : 0;
@@ -195,7 +230,7 @@ export async function getDashboardStats(
   const menuCountMap = new Map<string, { menuId: string; menuTitle: string; count: number }>();
   const dailyCountMap = new Map<string, number>();
 
-  for (const sel of selections ?? []) {
+  for (const sel of activeSelections) {
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (menu) {
       const existing = menuCountMap.get(menu.id);
@@ -253,20 +288,29 @@ export async function getVendorReport(
 
   if (adminProfile?.role !== "admin") return [];
 
+  const { data: disabledProfiles } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("status", "disabled");
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+
   const { data: selections } = await supabase
     .from("user_menu_selections")
     .select(
-      "delivery_date, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+      "delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
     )
     .gte("delivery_date", startDate)
     .lte("delivery_date", endDate)
     .order("delivery_date");
 
-  if (!selections || selections.length === 0) return [];
+  const activeSelections = (selections ?? []).filter(
+    (s) => !disabledUserIds.has(s.user_id)
+  );
+  if (activeSelections.length === 0) return [];
 
   const dateMap = new Map<string, Map<string, { menuTitle: string; count: number }>>();
 
-  for (const sel of selections) {
+  for (const sel of activeSelections) {
     const date = sel.delivery_date;
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (!menu) continue;
@@ -394,23 +438,32 @@ export async function getDeliverySummary(
 ): Promise<DailySummaryItem[]> {
   const supabase = await createClient();
 
+  const { data: disabledProfiles } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("status", "disabled");
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p) => p.id));
+
   const { data: selections } = await supabase
     .from("user_menu_selections")
     .select(
-      "delivery_date, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
+      "delivery_date, user_id, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
     )
     .gte("delivery_date", startDate)
     .lte("delivery_date", endDate)
     .order("delivery_date");
 
-  if (!selections || selections.length === 0) return [];
+  const activeSelections = (selections ?? []).filter(
+    (s) => !disabledUserIds.has(s.user_id)
+  );
+  if (activeSelections.length === 0) return [];
 
   const dateMap = new Map<
     string,
     Map<string, { menuId: string; menuTitle: string; menuImage: string | null; count: number }>
   >();
 
-  for (const sel of selections) {
+  for (const sel of activeSelections) {
     const date = sel.delivery_date;
     const menu = (sel.daily_menu_assignment as any)?.menu;
     if (!menu) continue;
@@ -444,4 +497,112 @@ export async function getDeliverySummary(
   }
 
   return result.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// ─── Subscription Day Counts (Admin) ─────────────────────────
+
+export async function getSubscriptionDayCounts(
+  periodId: string
+): Promise<Record<string, number>> {
+  const supabase = await createClient();
+
+  const { data: subscriptions } = await supabase
+    .from("subscriptions")
+    .select("id")
+    .eq("period_id", periodId);
+
+  if (!subscriptions?.length) return {};
+
+  const { data: disabledProfiles } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("status", "disabled");
+  const disabledUserIds = new Set(
+    (disabledProfiles ?? []).map((p) => p.id)
+  );
+
+  const subIds = subscriptions.map((s) => s.id);
+
+  const { data: deliveryDays } = await supabase
+    .from("delivery_days")
+    .select("week_start, selected_days, user_id")
+    .in("subscription_id", subIds);
+
+  if (!deliveryDays?.length) return {};
+
+  const dateCounts: Record<string, number> = {};
+  for (const dd of deliveryDays) {
+    if (disabledUserIds.has(dd.user_id)) continue;
+    for (const day of dd.selected_days) {
+      const date = new Date(dd.week_start + "T00:00:00");
+      date.setDate(date.getDate() + day - 1);
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      const dateStr = `${y}-${m}-${d}`;
+      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
+    }
+  }
+
+  return dateCounts;
+}
+
+export async function getSubscribersForDate(
+  periodId: string,
+  targetDate: string
+): Promise<{ userId: string; realName: string }[]> {
+  const supabase = await createClient();
+
+  const { data: subscriptions } = await supabase
+    .from("subscriptions")
+    .select("id, user_id")
+    .eq("period_id", periodId);
+
+  if (!subscriptions?.length) return [];
+
+  const { data: disabledProfiles } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("status", "disabled");
+  const disabledUserIds = new Set(
+    (disabledProfiles ?? []).map((p) => p.id)
+  );
+
+  const subIds = subscriptions.map((s) => s.id);
+  const subUserMap = new Map(subscriptions.map((s) => [s.id, s.user_id]));
+
+  const { data: deliveryDays } = await supabase
+    .from("delivery_days")
+    .select("subscription_id, user_id, week_start, selected_days")
+    .in("subscription_id", subIds);
+
+  if (!deliveryDays?.length) return [];
+
+  const matchedUserIds: string[] = [];
+  for (const dd of deliveryDays) {
+    if (disabledUserIds.has(dd.user_id)) continue;
+    for (const day of dd.selected_days) {
+      const date = new Date(dd.week_start + "T00:00:00");
+      date.setDate(date.getDate() + day - 1);
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      if (`${y}-${m}-${d}` === targetDate) {
+        matchedUserIds.push(dd.user_id);
+      }
+    }
+  }
+
+  if (matchedUserIds.length === 0) return [];
+
+  const uniqueIds = [...new Set(matchedUserIds)];
+  const { data: profiles } = await supabase
+    .from("profiles")
+    .select("id, real_name")
+    .in("id", uniqueIds);
+
+  return (profiles ?? []).map((p) => ({
+    userId: p.id,
+    realName: p.real_name || "이름 없음",
+  }));
 }

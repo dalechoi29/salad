@@ -141,7 +141,7 @@ export async function updateNickname(nickname: string): Promise<AuthResult> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "AUTH_REQUIRED" };
 
   const trimmed = nickname.trim();
   if (!trimmed || trimmed.length > 20) {

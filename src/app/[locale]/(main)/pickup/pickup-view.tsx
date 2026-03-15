@@ -29,12 +29,13 @@ import {
   X,
   Package,
 } from "lucide-react";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateShort, getTodayStr } from "@/lib/utils";
 import type { Pickup, MenuSelection, Review } from "@/types";
 import { confirmPickup, undoPickup, getMyPickups } from "@/lib/actions/pickup";
 import { createReview, getMyReviews } from "@/lib/actions/review";
+import { handleActionError } from "@/lib/handle-action-error";
 
 function isPast(dateStr: string): boolean {
   return dateStr <= getTodayStr();
@@ -69,6 +70,7 @@ export function PickupView({
   const [isUploading, setIsUploading] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
+  const router = useRouter();
   const todayStr = getTodayStr();
 
   useEffect(() => {
@@ -108,6 +110,7 @@ export function PickupView({
     try {
       const result = await confirmPickup(dateStr);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -123,6 +126,7 @@ export function PickupView({
     try {
       const result = await undoPickup(dateStr);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -194,6 +198,7 @@ export function PickupView({
         reviewImage
       );
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -206,8 +211,6 @@ export function PickupView({
     }
   }
 
-  const confirmedCount = pickups.filter((p) => p.confirmed).length;
-
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="flex items-center justify-between">
@@ -215,9 +218,12 @@ export function PickupView({
           <Package className="h-5 w-5" />
           <h1 className="text-2xl font-bold tracking-tight">내 샐러드</h1>
         </div>
-        <Badge variant="secondary" className="text-sm">
-          {confirmedCount}/{deliveryDates.length} 수령
-        </Badge>
+        <Link href="/menu">
+          <Button size="sm">
+            <UtensilsCrossed className="mr-1.5 h-4 w-4" />
+            샐러드 고르기
+          </Button>
+        </Link>
       </div>
 
       {deliveryDates.length === 0 ? (

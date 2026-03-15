@@ -15,7 +15,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
@@ -152,7 +151,7 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
                       onValueChange={(val) => setSelectedMenuId(val ?? "")}
                     >
                       <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="메뉴 선택..." />
+                        <span className="flex flex-1 text-left">{availableMenus.find((m) => m.id === selectedMenuId)?.title ?? "메뉴 선택..."}</span>
                       </SelectTrigger>
                       <SelectContent>
                         {availableMenus.length === 0 ? (
@@ -176,7 +175,7 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
                       }
                     >
                       <SelectTrigger className="w-28">
-                        <SelectValue />
+                        <span className="flex flex-1 text-left">{slotType === "main" ? "메인" : "선택"}</span>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="main">메인</SelectItem>

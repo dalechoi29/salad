@@ -10,7 +10,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -29,11 +28,7 @@ import {
   Check,
   Clock,
   Loader2,
-  Trash2,
-  X,
   MessageSquare,
-  ThumbsUp,
-  MessageCircle,
   ChevronDown,
   ChevronUp,
   Archive,
@@ -45,9 +40,10 @@ import { updateNickname, logout } from "@/lib/actions/auth";
 import { toggleFavorite } from "@/lib/actions/menu";
 import { deleteReview } from "@/lib/actions/review";
 import { deletePost } from "@/lib/actions/community";
+import { handleActionError } from "@/lib/handle-action-error";
 import { ReviewEditDialog } from "@/components/shared/review-edit-dialog";
-import { formatDateCompact } from "@/lib/utils";
-import type { Profile, SubscriptionPeriod, Subscription, MenuFavorite, Review, Post } from "@/types";
+import { FavoriteItem, ReviewItem, PostItem } from "./my-list-items";
+import type { Profile, SubscriptionPeriod, MenuFavorite, Review, Post } from "@/types";
 import type { SubscriptionWithDetails } from "./page";
 
 interface MyPageContentProps {
@@ -156,6 +152,7 @@ export function MyPageContent({
     try {
       const result = await updateNickname(newNickname);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -170,6 +167,7 @@ export function MyPageContent({
   async function handleRemoveFavorite(menuId: string) {
     const result = await toggleFavorite(menuId);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -180,6 +178,7 @@ export function MyPageContent({
   async function handleDeleteReview(reviewId: string) {
     const result = await deleteReview(reviewId);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -196,6 +195,7 @@ export function MyPageContent({
   async function handleDeletePost(postId: string) {
     const result = await deletePost(postId);
     if (result.error) {
+      if (handleActionError(result.error, router)) return;
       toast.error(result.error);
       return;
     }
@@ -335,48 +335,26 @@ export function MyPageContent({
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardContent className="p-0">
-              {favorites.map((fav, idx) => {
-                const menu = fav.menu as any;
-                if (!menu) return null;
-                return (
-                  <div key={fav.id}>
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <Link href={`/menu/${menu.id}`} className="flex-shrink-0">
-                        {menu.image_url ? (
-                          <img
-                            src={menu.image_url}
-                            alt={menu.title}
-                            className="h-10 w-10 rounded-md object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
-                            <UtensilsCrossed className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        )}
-                      </Link>
-                      <Link href={`/menu/${menu.id}`} className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{menu.title}</p>
-                        {menu.sauce && (
-                          <p className="text-sm text-muted-foreground">
-                            {menu.sauce}
-                          </p>
-                        )}
-                      </Link>
-                      <button
-                        onClick={() => handleRemoveFavorite(menu.id)}
-                        className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                    {idx < favorites.length - 1 && <Separator />}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
+          <>
+            <Card>
+              <CardContent className="p-0">
+                {favorites.slice(0, 1).map((fav) => (
+                  <FavoriteItem
+                    key={fav.id}
+                    fav={fav}
+                    onRemove={handleRemoveFavorite}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+            {favorites.length > 1 && (
+              <Link href="/my/favorites" className="block mt-3">
+                <Button variant="outline" className="w-full">
+                  더보기 ({favorites.length})
+                </Button>
+              </Link>
+            )}
+          </>
         )}
       </div>
 
@@ -399,71 +377,21 @@ export function MyPageContent({
           </Card>
         ) : (
           <div className="space-y-2">
-            {reviews.map((review) => {
-              const menu = review.menu;
-              return (
-                <Card key={review.id}>
-                  <CardContent className="py-3">
-                    <div className="flex items-start gap-3">
-                      {menu?.image_url ? (
-                        <Link href={`/menu/${menu.id}`} className="flex-shrink-0">
-                          <img
-                            src={menu.image_url}
-                            alt={menu.title ?? ""}
-                            className="h-12 w-12 rounded-md object-cover"
-                          />
-                        </Link>
-                      ) : (
-                        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-md bg-muted">
-                          <UtensilsCrossed className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium">
-                            {menu?.title ?? "메뉴"}
-                          </p>
-                          <div className="flex items-center gap-0.5">
-                            <button
-                              onClick={() => setEditingReview(review)}
-                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteReview(review.id)}
-                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1">
-                          {[1, 2, 3, 4, 5].map((n) => (
-                            <Star
-                              key={n}
-                              className={`h-3.5 w-3.5 ${
-                                n <= review.rating
-                                  ? "fill-yellow-400 text-yellow-400"
-                                  : "text-muted-foreground/30"
-                              }`}
-                            />
-                          ))}
-                          <span className="ml-1 text-xs text-muted-foreground">
-                            {formatDateCompact(review.pickup_date)}
-                          </span>
-                        </div>
-                        {review.comment && (
-                          <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
-                            {review.comment}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+            {reviews.slice(0, 1).map((review) => (
+              <ReviewItem
+                key={review.id}
+                review={review}
+                onEdit={setEditingReview}
+                onDelete={handleDeleteReview}
+              />
+            ))}
+            {reviews.length > 1 && (
+              <Link href="/my/reviews" className="block mt-3">
+                <Button variant="outline" className="w-full">
+                  더보기 ({reviews.length})
+                </Button>
+              </Link>
+            )}
           </div>
         )}
       </div>
@@ -487,51 +415,28 @@ export function MyPageContent({
           </Card>
         ) : (
           <div className="space-y-2">
-            {posts.map((post) => (
-              <Link key={post.id} href={`/community/${post.id}`}>
-                <Card className="transition-colors hover:bg-accent/50">
-                  <CardContent className="py-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium leading-tight">
-                          {post.title}
-                        </p>
-                        <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
-                          <span>
-                            {new Date(post.created_at).toLocaleDateString("ko-KR")}
-                          </span>
-                          <div className="flex items-center gap-1">
-                            <ThumbsUp className="h-3 w-3" />
-                            {post.vote_count}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <MessageCircle className="h-3 w-3" />
-                            {post.comment_count ?? 0}
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          handleDeletePost(post.id);
-                        }}
-                        className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
+            {posts.slice(0, 1).map((post) => (
+              <PostItem
+                key={post.id}
+                post={post}
+                onDelete={handleDeletePost}
+              />
             ))}
+            {posts.length > 1 && (
+              <Link href="/my/posts" className="block mt-3">
+                <Button variant="outline" className="w-full">
+                  더보기 ({posts.length})
+                </Button>
+              </Link>
+            )}
           </div>
         )}
       </div>
 
       {/* Logout */}
       <Button
-        variant="outline"
-        className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+        variant="ghost"
+        className="w-full text-muted-foreground hover:text-destructive"
         onClick={handleLogout}
         disabled={isLoggingOut}
       >

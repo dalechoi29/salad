@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import {
@@ -23,6 +24,7 @@ import {
   cancelSubscription,
 } from "@/lib/actions/subscription";
 import { bulkSaveDeliveryDays } from "@/lib/actions/delivery";
+import { handleActionError } from "@/lib/handle-action-error";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -38,6 +40,9 @@ import {
   Salad,
   EllipsisVertical,
 } from "lucide-react";
+import successAnimationData from "@/assets/animations/success.json";
+
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import {
   Popover,
   PopoverTrigger,
@@ -367,12 +372,17 @@ export function SubscriptionView({
   if (!period) {
     return (
       <div className="mx-auto max-w-lg space-y-6">
-        <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.back()}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-2xl font-bold tracking-tight">월간 구독</h1>
+        </div>
         <Card>
           <CardContent className="flex flex-col items-center gap-4 py-12">
             <AlertCircle className="h-10 w-10 text-muted-foreground" />
             <p className="text-center text-muted-foreground">
-              No active subscription period
+              현재 진행 중인 구독 기간이 없어요
             </p>
           </CardContent>
         </Card>
@@ -416,8 +426,13 @@ function SuccessScreen({
     <div className="mx-auto max-w-lg space-y-6">
       <Card>
         <CardContent className="flex flex-col items-center gap-4 py-12">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-            <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
+          <div style={{ width: 100, height: 100 }}>
+            <Lottie
+              animationData={successAnimationData}
+              loop={false}
+              autoplay
+              style={{ width: 100, height: 100 }}
+            />
           </div>
           <div className="space-y-2 text-center">
             <h2 className="text-xl font-semibold">구독 신청 완료!</h2>
@@ -447,6 +462,7 @@ function SubscriptionForm({
   onSuccess: () => void;
 }) {
   const t = useTranslations("subscription");
+  const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [frequency, setFrequency] = useState<number | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
@@ -524,6 +540,7 @@ function SubscriptionForm({
       );
 
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(
           result.error === "PERIOD_CLOSED"
             ? "신청 기간이 마감되었습니다"
@@ -538,6 +555,7 @@ function SubscriptionForm({
           datesToWeeklySelections(selectedDates)
         );
         if (syncResult.error) {
+          if (handleActionError(syncResult.error, router)) return;
           toast.error("배달일 동기화 실패: " + syncResult.error);
         }
       }
@@ -550,7 +568,12 @@ function SubscriptionForm({
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
-      <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.back()}>
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
+      </div>
 
       <PeriodInfoCard period={period} phase={phase} />
 
@@ -653,6 +676,12 @@ function SubscriptionForm({
           <Separator />
 
           <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm">
+            {period.price_per_salad > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">샐러드 단가</span>
+                <span className="font-medium">{period.price_per_salad.toLocaleString()}원</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">배달 횟수</span>
               <span className="font-medium">{deliveryDayCount}회</span>
@@ -852,6 +881,7 @@ function SubscriptionStatus({
         editSelectedDates.length > 0 ? editSelectedDates.length : undefined
       );
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -862,6 +892,7 @@ function SubscriptionStatus({
           datesToWeeklySelections(editSelectedDates)
         );
         if (syncResult.error) {
+          if (handleActionError(syncResult.error, router)) return;
           toast.error("배달일 동기화 실패: " + syncResult.error);
         }
       }
@@ -900,6 +931,7 @@ function SubscriptionStatus({
         selectedPayment
       );
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -915,6 +947,7 @@ function SubscriptionStatus({
     if (isPaid) {
       const result = await updatePaymentMethod(subscription.id, method);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -930,6 +963,7 @@ function SubscriptionStatus({
     try {
       const result = await cancelSubscription(subscription.id);
       if (result.error) {
+        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -1089,6 +1123,12 @@ function SubscriptionStatus({
               </div>
 
               <div className="rounded-lg bg-muted/50 p-3 space-y-1 text-sm">
+                {period.price_per_salad > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">샐러드 단가</span>
+                    <span className="font-medium">{period.price_per_salad.toLocaleString()}원</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">배달 횟수</span>
                   <span className="font-medium">{editDeliveryDays}회</span>
@@ -1321,7 +1361,7 @@ function SubscriptionStatus({
             <DialogTitle>구독 신청 취소</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            구독 신청을 취소하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+            구독 신청을 취소하시겠어요? 기간 내 다시 신청 가능해요.
           </p>
           <div className="flex gap-2 pt-2">
             <Button
@@ -1396,12 +1436,6 @@ function PeriodInfoCard({
             {formatDate(period.pay_start)} ~ {formatDate(period.pay_end)}
           </span>
         </div>
-        {period.price_per_salad > 0 && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">샐러드 단가</span>
-            <span>{period.price_per_salad.toLocaleString()}원</span>
-          </div>
-        )}
       </CardContent>
     </Card>
   );

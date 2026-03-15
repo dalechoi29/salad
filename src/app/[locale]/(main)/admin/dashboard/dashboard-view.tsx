@@ -8,7 +8,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import {
   ArrowLeft,
@@ -93,7 +92,7 @@ export function DashboardView({ initialStats, periods }: DashboardViewProps) {
           onValueChange={(v) => handlePeriodChange(v ?? "all")}
         >
           <SelectTrigger className="w-[200px]">
-            <SelectValue />
+            <span className="flex flex-1 text-left">{selectedPeriod === "all" ? "전체" : periods.find((p) => p.id === selectedPeriod)?.target_month ?? selectedPeriod}</span>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">전체</SelectItem>
