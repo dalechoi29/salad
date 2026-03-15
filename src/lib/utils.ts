@@ -15,8 +15,14 @@ export function formatDateISO(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+export function getKSTDate(): Date {
+  return new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" })
+  );
+}
+
 export function getTodayStr(): string {
-  return formatDateISO(new Date());
+  return formatDateISO(getKSTDate());
 }
 
 export function formatDateShort(dateStr: string): string {

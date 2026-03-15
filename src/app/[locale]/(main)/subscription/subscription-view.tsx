@@ -122,6 +122,23 @@ function countWeekdaysInPeriod(
   return count;
 }
 
+function getMinDeliveryDaysForFrequency(
+  freq: number,
+  start: string | null,
+  end: string | null,
+  holidays: Set<string>
+): number {
+  const presets = SCHEDULE_PRESETS.filter((p) => p.freq === freq);
+  if (presets.length === 0 || !start || !end) return freq * WEEKS_PER_MONTH;
+
+  let min = Infinity;
+  for (const preset of presets) {
+    const count = countWeekdaysInPeriod(start, end, preset.weekdays, holidays);
+    if (count < min) min = count;
+  }
+  return min === Infinity ? freq * WEEKS_PER_MONTH : min;
+}
+
 function getDeliveryDates(
   start: string | null,
   end: string | null,
@@ -269,6 +286,7 @@ function DeliveryCalendar({
             "flex-1 text-[0.8rem] font-normal text-muted-foreground select-none",
           weekdays: "flex w-full [&>*:nth-child(n+6)]:hidden",
           week: "mt-2 flex w-full",
+          today: "",
         }}
         components={{
           Day: ({ day, modifiers, ...tdProps }) => {
@@ -520,10 +538,11 @@ function SubscriptionForm({
     [frequency]
   );
 
+  const holidaySetForCount = new Set(holidays);
   const deliveryDayCount =
     selectedDates.length > 0
       ? selectedDates.length
-      : (frequency ?? 0) * WEEKS_PER_MONTH;
+      : getMinDeliveryDaysForFrequency(frequency ?? 0, period.delivery_start, period.delivery_end, holidaySetForCount);
   const totalSalads = deliveryDayCount * salads;
   const totalPrice =
     period.price_per_salad > 0 ? totalSalads * period.price_per_salad : null;
@@ -784,7 +803,7 @@ function SubscriptionStatus({
                 preset.weekdays,
                 holidaySet
               )
-            : currentFrequency * WEEKS_PER_MONTH;
+            : getMinDeliveryDaysForFrequency(currentFrequency, period.delivery_start, period.delivery_end, holidaySet);
         })());
   const currentDeliveryDays = savedDates.length > 0 ? savedDates.length : appliedDeliveryDays;
   const totalSalads = appliedDeliveryDays * currentSalads;
@@ -861,7 +880,7 @@ function SubscriptionStatus({
   const editDeliveryDays =
     editSelectedDates.length > 0
       ? editSelectedDates.length
-      : frequency * WEEKS_PER_MONTH;
+      : getMinDeliveryDaysForFrequency(frequency, period.delivery_start, period.delivery_end, holidaySet);
   const editTotalSalads = editDeliveryDays * salads;
   const editTotalPrice =
     period.price_per_salad > 0
@@ -1231,7 +1250,7 @@ function SubscriptionStatus({
             </Button>
           </Link>
           <Popover>
-            <PopoverTrigger render={<span className="flex w-full cursor-pointer" />}>
+            <PopoverTrigger render={<button type="button" className="flex w-full cursor-pointer" />}>
               <Button
                 className="h-12 w-full text-base opacity-40 pointer-events-none"
                 disabled

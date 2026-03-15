@@ -17,7 +17,7 @@ export default function Loading() {
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
-      <div className="flex flex-col items-center gap-3">
+      <div className="flex flex-col items-center">
         <div style={{ width: 120, height: 120 }}>
           <Lottie
             animationData={data}
@@ -26,7 +26,7 @@ export default function Loading() {
             style={{ width: 120, height: 120 }}
           />
         </div>
-        <p className="text-sm text-muted-foreground">신선하게 준비 중이에요!</p>
+        <p className="-mt-2 text-sm text-muted-foreground">신선하게 준비 중이에요!</p>
       </div>
     </div>
   );

@@ -19,7 +19,7 @@ import {
   getSubscriptionPeriods,
 } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
-import { deliveryDaysToDateStrings, getTodayStr, countSelectedDays, formatDateFull } from "@/lib/utils";
+import { deliveryDaysToDateStrings, getTodayStr, getKSTDate, countSelectedDays, formatDateFull } from "@/lib/utils";
 import { getDailyMenusByDate, getMyMenuSelections } from "@/lib/actions/menu";
 import { getPickupStreak, getMyPickups } from "@/lib/actions/pickup";
 import { getSubscriptionDayCounts } from "@/lib/actions/admin";
@@ -86,7 +86,8 @@ export default async function HomePage() {
     }
   }
 
-  const isWeekday = new Date().getDay() >= 1 && new Date().getDay() <= 5;
+  const kstNow = getKSTDate();
+  const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
 
   const [streak, todayPickups, todaySelections] = await Promise.all([
     getPickupStreak(),
@@ -113,9 +114,9 @@ export default async function HomePage() {
 
   if (profile) {
     const allPeriods = await getSubscriptionPeriods();
-    const now = new Date();
-    const cm = now.getMonth() + 1;
-    const cy = now.getFullYear();
+    const kstForPeriod = getKSTDate();
+    const cm = kstForPeriod.getMonth() + 1;
+    const cy = kstForPeriod.getFullYear();
     const nm = cm === 12 ? 1 : cm + 1;
     const ny = cm === 12 ? cy + 1 : cy;
     const curMonthStr = `${cy}년 ${cm}월`;
@@ -222,7 +223,7 @@ function HomeContent({
     ? deliveryDayCount * (subscription.salads_per_delivery ?? 1)
     : 0;
 
-  const now = new Date();
+  const now = getKSTDate();
   const isApplyingPeriod =
     period &&
     now >= new Date(period.apply_start) && now <= new Date(period.apply_end);
@@ -231,20 +232,35 @@ function HomeContent({
     now >= new Date(period.pay_start) && now <= new Date(period.pay_end);
   const isActionablePeriod = isApplyingPeriod || isPayingPeriod;
 
+  const targetMonthShort = period?.target_month
+    ? period.target_month.replace(/^\d{4}년\s*/, "")
+    : null;
+
   let subscriptionCardTitle = tSub("title");
   if (isApplyingPeriod) {
-    subscriptionCardTitle = "구독 신청 기간";
+    subscriptionCardTitle = targetMonthShort
+      ? `${targetMonthShort} 구독 신청 기간`
+      : "구독 신청 기간";
   } else if (isPayingPeriod && !isPeriodPaid) {
     subscriptionCardTitle = "결제 기간";
   }
 
-  let subscriptionCardSubtitle = period?.target_month ?? null;
+  const formatApplyEnd = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일까지 신청해주세요`;
+  };
+
+  let subscriptionCardSubtitle: string | null = null;
   if (isPayingPeriod && !isPeriodPaid) {
     subscriptionCardSubtitle = "결제하고 '결제 완료 신청'을 눌러주세요";
+  } else if (isApplyingPeriod && period?.apply_end) {
+    subscriptionCardSubtitle = formatApplyEnd(period.apply_end);
+  } else {
+    subscriptionCardSubtitle = period?.target_month ?? null;
   }
 
   const subscriptionCard = (
-    <Link href={isLoggedIn ? "/subscription" : "/signup"} className="block">
+    <Link href={isLoggedIn ? "/subscription" : "/login"} className="block">
       <Card className={`transition-colors hover:bg-accent/50 ${isActionablePeriod && !isPeriodPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
         <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">

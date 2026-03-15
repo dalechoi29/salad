@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient as createJsClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 function isSupabaseConfigured(): boolean {
@@ -40,6 +41,24 @@ export async function createClient() {
       },
     }
   );
+}
+
+/**
+ * Creates a Supabase client with the service role key that bypasses RLS.
+ * Only use this for admin operations that require elevated privileges
+ * (e.g., deleting auth users, bypassing RLS for deletions).
+ */
+export function createAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured");
+  }
+
+  return createJsClient(url, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 }
 
 /**

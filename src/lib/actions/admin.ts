@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types";
 
@@ -21,6 +21,39 @@ export async function approveUser(
 
   if (error) {
     console.error("[approveUser] Error:", error);
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin/users");
+  return { success: true };
+}
+
+export async function resetUserPassword(
+  userId: string,
+  password: string
+): Promise<ActionResult> {
+  if (!password || password.length !== 4 || !/^\d{4}$/.test(password)) {
+    return { error: "비밀번호는 4자리 숫자여야 합니다" };
+  }
+
+  const supabase = await createClient();
+
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .single();
+
+  if (adminProfile?.role !== "admin") {
+    return { error: "권한이 없습니다" };
+  }
+
+  const { error } = await supabase.rpc("reset_user_password", {
+    target_user_id: userId,
+    new_password: password,
+  });
+
+  if (error) {
     return { error: error.message };
   }
 
@@ -74,6 +107,50 @@ export async function enableUser(userId: string): Promise<ActionResult> {
 
   if (error) {
     return { error: error.message };
+  }
+
+  revalidatePath("/admin/users");
+  return { success: true };
+}
+
+export async function deleteUser(userId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .single();
+
+  if (adminProfile?.role !== "admin") {
+    return { error: "권한이 없습니다" };
+  }
+
+  const { data: target } = await supabase
+    .from("profiles")
+    .select("status")
+    .eq("id", userId)
+    .single();
+
+  if (target?.status !== "disabled") {
+    return { error: "비활성화된 사용자만 삭제할 수 있습니다" };
+  }
+
+  const adminSupabase = createAdminClient();
+
+  const { error: profileError } = await adminSupabase
+    .from("profiles")
+    .delete()
+    .eq("id", userId);
+
+  if (profileError) {
+    return { error: profileError.message };
+  }
+
+  const { error: authError } = await adminSupabase.auth.admin.deleteUser(userId);
+
+  if (authError) {
+    return { error: authError.message };
   }
 
   revalidatePath("/admin/users");

@@ -157,6 +157,36 @@ export async function updateNickname(nickname: string): Promise<AuthResult> {
   return { success: true };
 }
 
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<AuthResult> {
+  if (!newPassword || newPassword.length !== 4 || !/^\d{4}$/.test(newPassword)) {
+    return { error: "새 비밀번호는 4자리 숫자여야 합니다" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "로그인이 필요합니다" };
+
+  const { error } = await supabase.rpc("change_own_password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+
+  if (error) {
+    if (error.message.includes("INVALID_CURRENT_PASSWORD")) {
+      return { error: "현재 비밀번호가 올바르지 않습니다" };
+    }
+    return { error: error.message };
+  }
+
+  return { success: true };
+}
+
 export async function getCurrentProfile() {
   const supabase = await createClient();
 

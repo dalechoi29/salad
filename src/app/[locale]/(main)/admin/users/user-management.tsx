@@ -23,8 +23,10 @@ import {
 } from "@/components/ui/dialog";
 import {
   approveUser,
+  resetUserPassword,
   disableUser,
   enableUser,
+  deleteUser,
   addAllowedDomain,
   removeAllowedDomain,
 } from "@/lib/actions/admin";
@@ -39,6 +41,7 @@ import {
   Loader2,
   ArrowLeft,
   UserPlus,
+  KeyRound,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import type { Profile, AllowedDomain } from "@/types";
@@ -68,6 +71,8 @@ export function UserManagement({
   const [domains, setDomains] = useState(initialDomains);
   const [newDomain, setNewDomain] = useState("");
   const [approvePassword, setApprovePassword] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetDialogUserId, setResetDialogUserId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   async function handleApprove(userId: string) {
@@ -90,6 +95,26 @@ export function UserManagement({
       prev.map((u) => (u.id === userId ? { ...u, status: "approved" as const } : u))
     );
     setApprovePassword("");
+  }
+
+  async function handleResetPassword(userId: string) {
+    if (!resetPassword || resetPassword.length !== 4) {
+      toast.error("4자리 비밀번호를 입력해주세요");
+      return;
+    }
+
+    setLoadingId(userId);
+    const result = await resetUserPassword(userId, resetPassword);
+    setLoadingId(null);
+
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+
+    toast.success("비밀번호가 재설정되었습니다");
+    setResetPassword("");
+    setResetDialogUserId(null);
   }
 
   async function handleDisable(userId: string) {
@@ -122,6 +147,20 @@ export function UserManagement({
     setUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, status: "approved" as const } : u))
     );
+  }
+
+  async function handleDelete(userId: string) {
+    setLoadingId(userId);
+    const result = await deleteUser(userId);
+    setLoadingId(null);
+
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+
+    toast.success("사용자가 삭제되었습니다");
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
   }
 
   async function handleAddDomain() {
@@ -317,19 +356,76 @@ export function UserManagement({
                     {statusLabels.approved}
                   </span>
                   {user.role !== "admin" && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleDisable(user.id)}
-                      disabled={loadingId === user.id}
-                      title="비활성화"
-                    >
-                      {loadingId === user.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <UserX className="h-4 w-4" />
-                      )}
-                    </Button>
+                    <>
+                      <Dialog
+                        open={resetDialogUserId === user.id}
+                        onOpenChange={(open) => {
+                          setResetDialogUserId(open ? user.id : null);
+                          if (!open) setResetPassword("");
+                        }}
+                      >
+                        <DialogTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="비밀번호 재설정"
+                            />
+                          }
+                        >
+                          <KeyRound className="h-4 w-4" />
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>비밀번호 재설정</DialogTitle>
+                            <DialogDescription>
+                              {user.real_name}님의 새 4자리 비밀번호를 입력해주세요.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            maxLength={4}
+                            placeholder="4자리 숫자"
+                            value={resetPassword}
+                            onChange={(e) =>
+                              setResetPassword(e.target.value.replace(/\D/g, ""))
+                            }
+                          />
+                          <DialogFooter>
+                            <DialogClose render={<Button variant="outline" />}>
+                              취소
+                            </DialogClose>
+                            <Button
+                              onClick={() => handleResetPassword(user.id)}
+                              disabled={
+                                resetPassword.length !== 4 ||
+                                loadingId === user.id
+                              }
+                            >
+                              {loadingId === user.id && (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              )}
+                              변경
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDisable(user.id)}
+                        disabled={loadingId === user.id}
+                        title="비활성화"
+                      >
+                        {loadingId === user.id &&
+                        resetDialogUserId !== user.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <UserX className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
@@ -384,6 +480,34 @@ export function UserManagement({
                       )}
                       활성화
                     </Button>
+                    <Dialog>
+                      <DialogTrigger render={<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" />}>
+                        <Trash2 className="h-4 w-4" />
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>사용자 삭제</DialogTitle>
+                          <DialogDescription>
+                            {user.real_name} ({user.email}) 계정을 삭제하시겠어요? 이 작업은 되돌릴 수 없습니다.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                          <DialogClose render={<Button variant="outline" />}>
+                            취소
+                          </DialogClose>
+                          <Button
+                            variant="destructive"
+                            onClick={() => handleDelete(user.id)}
+                            disabled={loadingId === user.id}
+                          >
+                            {loadingId === user.id && (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            )}
+                            삭제
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   </div>
                 </div>
                 {index < disabledUsers.length - 1 && <Separator />}

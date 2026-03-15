@@ -15,6 +15,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
@@ -28,15 +30,17 @@ import {
   Check,
   Clock,
   Loader2,
+  Shield,
   MessageSquare,
   ChevronDown,
   ChevronUp,
   Archive,
+  KeyRound,
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { updateNickname, logout } from "@/lib/actions/auth";
+import { updateNickname, logout, changePassword } from "@/lib/actions/auth";
 import { toggleFavorite } from "@/lib/actions/menu";
 import { deleteReview } from "@/lib/actions/review";
 import { deletePost } from "@/lib/actions/community";
@@ -69,14 +73,20 @@ function SubscriptionCard({ entry }: { entry: SubscriptionWithDetails }) {
     now >= new Date(period.pay_start) && now <= new Date(period.pay_end);
   const isActionable = isApplying || isPaying;
 
+  const targetMonthShort = period.target_month.replace(/^\d{4}년\s*/, "");
+
   let title = period.target_month;
-  if (isApplying) title = "구독 신청 기간";
+  if (isApplying) title = `${targetMonthShort} 구독 신청 기간`;
   else if (isPaying && !isPaid) title = "결제 기간";
 
-  let subtitle: string | null = period.target_month;
-  if (isApplying) subtitle = period.target_month;
+  const formatApplyEnd = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일까지 신청해주세요`;
+  };
+
+  let subtitle: string | null = null;
+  if (isApplying) subtitle = formatApplyEnd(period.apply_end);
   else if (isPaying && !isPaid) subtitle = "결제하고 '결제 완료'를 눌러주세요";
-  else subtitle = null;
 
   return (
     <Link href={`/subscription?period=${period.id}`} className="block">
@@ -146,6 +156,10 @@ export function MyPageContent({
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [passwordDialog, setPasswordDialog] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [isSavingPassword, setIsSavingPassword] = useState(false);
 
   async function handleSaveNickname() {
     setIsSavingNickname(true);
@@ -201,6 +215,26 @@ export function MyPageContent({
     }
     setPosts((prev) => prev.filter((p) => p.id !== postId));
     toast.success("게시글이 삭제되었습니다");
+  }
+
+  async function handleChangePassword() {
+    if (currentPw.length !== 4 || newPw.length !== 4) {
+      toast.error("4자리 비밀번호를 입력해주세요");
+      return;
+    }
+    setIsSavingPassword(true);
+    const result = await changePassword(currentPw, newPw);
+    setIsSavingPassword(false);
+
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+
+    toast.success("비밀번호가 변경되었습니다");
+    setPasswordDialog(false);
+    setCurrentPw("");
+    setNewPw("");
   }
 
   async function handleLogout() {
@@ -433,20 +467,38 @@ export function MyPageContent({
         )}
       </div>
 
-      {/* Logout */}
-      <Button
-        variant="ghost"
-        className="w-full text-muted-foreground hover:text-destructive"
-        onClick={handleLogout}
-        disabled={isLoggingOut}
-      >
-        {isLoggingOut ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <LogOut className="mr-2 h-4 w-4" />
+      {/* Password Change, Logout & Admin */}
+      <div className={`grid gap-2 ${profile?.role === "admin" ? "grid-cols-3" : "grid-cols-2"}`}>
+        <Button
+          variant="ghost"
+          className="text-muted-foreground"
+          onClick={() => setPasswordDialog(true)}
+        >
+          <KeyRound className="mr-2 h-4 w-4" />
+          비밀번호 변경
+        </Button>
+        <Button
+          variant="ghost"
+          className="text-muted-foreground hover:text-destructive"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+        >
+          {isLoggingOut ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <LogOut className="mr-2 h-4 w-4" />
+          )}
+          로그아웃
+        </Button>
+        {profile?.role === "admin" && (
+          <Link href="/admin" className="block">
+            <Button variant="ghost" className="w-full text-muted-foreground hover:text-primary">
+              <Shield className="mr-2 h-4 w-4" />
+              관리자
+            </Button>
+          </Link>
         )}
-        로그아웃
-      </Button>
+      </div>
 
       {/* Nickname Edit Dialog */}
       <Dialog open={nicknameDialog} onOpenChange={setNicknameDialog}>
@@ -479,6 +531,68 @@ export function MyPageContent({
                   <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                 )}
                 저장
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Password Change Dialog */}
+      <Dialog
+        open={passwordDialog}
+        onOpenChange={(open) => {
+          setPasswordDialog(open);
+          if (!open) {
+            setCurrentPw("");
+            setNewPw("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>비밀번호 변경</DialogTitle>
+            <DialogDescription>
+              새로운 4자리 숫자 비밀번호를 설정해주세요.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <Label>현재 비밀번호</Label>
+              <Input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="현재 4자리 비밀번호"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value.replace(/\D/g, ""))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>새 비밀번호</Label>
+              <Input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="새 4자리 비밀번호"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value.replace(/\D/g, ""))}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setPasswordDialog(false)}
+              >
+                취소
+              </Button>
+              <Button
+                onClick={handleChangePassword}
+                disabled={isSavingPassword || currentPw.length !== 4 || newPw.length !== 4}
+              >
+                {isSavingPassword && (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                )}
+                변경
               </Button>
             </div>
           </div>
