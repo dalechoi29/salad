@@ -187,15 +187,6 @@ function MonthCalendar({
     return total;
   }, [counts]);
 
-  const weekTotal = useMemo(() => {
-    let total = 0;
-    for (let i = 0; i < 5; i++) {
-      const dateStr = fmtISO(getDateForDay(i));
-      total += counts[dateStr] || 0;
-    }
-    return total;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentMonday, counts]);
 
   const dialogDateFormatted = dialogDate
     ? new Date(dialogDate + "T00:00:00").toLocaleDateString("ko-KR", {
@@ -222,9 +213,6 @@ function MonthCalendar({
               <CardTitle className="text-base">
                 {formatWeekRange(currentMonday)}
               </CardTitle>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                이번 주 {weekTotal}건
-              </p>
             </div>
             <Button
               variant="ghost"

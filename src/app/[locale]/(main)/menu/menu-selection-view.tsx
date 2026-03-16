@@ -223,9 +223,10 @@ export function MenuSelectionView({
     dateStr: string,
     newQuantity: number
   ) {
+    const replaceForDate = saladsPerDelivery <= 1 && newQuantity > 0;
     setUpdatingMenuId(dailyMenuId);
     try {
-      const result = await updateMenuQuantity(dailyMenuId, dateStr, newQuantity);
+      const result = await updateMenuQuantity(dailyMenuId, dateStr, newQuantity, replaceForDate);
       if (result.error) {
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
@@ -233,10 +234,13 @@ export function MenuSelectionView({
       }
 
       setSelections((prev) => {
-        const filtered = prev.filter(
+        let filtered = prev.filter(
           (s) =>
             !(s.delivery_date === dateStr && s.daily_menu_id === dailyMenuId)
         );
+        if (replaceForDate) {
+          filtered = filtered.filter((s) => s.delivery_date !== dateStr);
+        }
         if (newQuantity <= 0) return filtered;
         const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
         return [

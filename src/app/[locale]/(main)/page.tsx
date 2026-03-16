@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import { getHolidays } from "@/lib/actions/holiday";
 import { Link } from "@/i18n/navigation";
 import { HomePickupCard } from "./home-pickup-card";
 import { SubscriptionStatusView } from "./admin/subscription-status/subscription-status-view";
+import { HomeSkeleton } from "./home-skeleton";
 import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod, Holiday } from "@/types";
 
 function findCurrentSubscription(
@@ -46,7 +48,15 @@ function findCurrentSubscription(
   return subscriptions[0] ?? null;
 }
 
-export default async function HomePage() {
+export default function HomePage() {
+  return (
+    <Suspense fallback={<HomeSkeleton />}>
+      <HomePageContent />
+    </Suspense>
+  );
+}
+
+async function HomePageContent() {
   const todayStr = getTodayStr();
   const kstNow = getKSTDate();
   const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;

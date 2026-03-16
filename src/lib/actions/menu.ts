@@ -200,7 +200,8 @@ export async function getMyMenuSelections(
 export async function updateMenuQuantity(
   dailyMenuId: string,
   deliveryDate: string,
-  quantity: number
+  quantity: number,
+  replaceForDate = false
 ): Promise<ActionResult> {
   const supabase = await createClient();
   const {
@@ -218,6 +219,15 @@ export async function updateMenuQuantity(
 
     if (error) return { error: error.message };
     return { success: true };
+  }
+
+  if (replaceForDate) {
+    await supabase
+      .from("user_menu_selections")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("delivery_date", deliveryDate)
+      .neq("daily_menu_id", dailyMenuId);
   }
 
   const { data: existing } = await supabase

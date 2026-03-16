@@ -1305,7 +1305,8 @@ function SubscriptionStatus({
                           <>
                             <p>1. Chak 앱을 켜주세요.</p>
                             <p>2. QR 결제를 선택하고 아래 QR을 스캔해주세요.</p>
-                            <p>3. 금액을 입력해주세요.</p>
+                            <p>3. 금액을 입력하고 결제를 진행해주세요.</p>
+                            <p>4. 결제가 완료되면 [결제 완료 신청] 버튼을 눌러주세요.</p>
                             <div className="flex justify-center pt-2">
                               <Image
                                 src="/images/qr-payment.png"
@@ -1324,9 +1325,10 @@ function SubscriptionStatus({
                         )}
                         {method.value === "credit_card" && (
                           <>
-                            <p>1. 카카오톡에서 &apos;샖라피&apos;를 추가해주세요.</p>
+                            <p>1. 카카오톡에서 &apos;샐라피&apos;를 추가해주세요.</p>
                             <p>2. 지멘스 헬시니어스 소속이라 말씀해주세요.</p>
                             <p>3. 카드번호, 유효기간, 결제금액을 채팅으로 보내주세요.</p>
+                            <p>4. 결제가 완료되면 [결제 완료 신청] 버튼을 눌러주세요.</p>
                           </>
                         )}
                       </div>
