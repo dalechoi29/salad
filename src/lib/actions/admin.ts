@@ -2,7 +2,8 @@
 
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { ActionResult } from "@/types";
+import type { ActionResult, DailySaladStatus } from "@/types";
+import { formatDateISO, getKSTDate } from "@/lib/utils";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const SUPER_ADMIN_ROLES = ["super_admin"];
@@ -914,4 +915,187 @@ export async function getSubscribersForDate(
     realName: p.real_name || "이름 없음",
     saladsPerDelivery: userSaladsMap.get(p.id) ?? 1,
   }));
+}
+
+// ─── Company Users (same email domain) ──────────────────────
+
+export async function getCompanyUsers(): Promise<
+  { id: string; realName: string }[]
+> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user?.email) return [];
+
+  const domain = user.email.split("@")[1];
+  if (!domain) return [];
+
+  const { data } = await supabase
+    .from("profiles")
+    .select("id, real_name, email")
+    .eq("status", "approved")
+    .ilike("email", `%@${domain}`)
+    .order("real_name");
+
+  return (data ?? []).map((p: any) => ({
+    id: p.id,
+    realName: p.real_name || "이름 없음",
+  }));
+}
+
+// ─── Daily Salad Status ─────────────────────────────────────
+
+export async function getDailySaladStatus(
+  date: string
+): Promise<DailySaladStatus | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("daily_salad_status")
+    .select("*")
+    .eq("status_date", date)
+    .single();
+  return (data as DailySaladStatus) ?? null;
+}
+
+export async function getDailySaladStatusHistory(
+  startDate: string,
+  endDate: string
+): Promise<DailySaladStatus[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("daily_salad_status")
+    .select("*")
+    .gte("status_date", startDate)
+    .lte("status_date", endDate)
+    .order("status_date", { ascending: false });
+  return (data as DailySaladStatus[]) ?? [];
+}
+
+export async function updateDailySaladStatus(
+  date: string,
+  isChecked: boolean,
+  location?: string,
+  photoUrl?: string,
+  helpers?: string
+): Promise<ActionResult> {
+  const role = await getCallerRole();
+  if (!role || !ADMIN_ROLES.includes(role)) return { error: "권한이 없습니다" };
+
+  const user = await getAuthUser();
+  if (!user) return { error: "AUTH_REQUIRED" };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("daily_salad_status")
+    .upsert(
+      {
+        status_date: date,
+        is_checked: isChecked,
+        location: location || null,
+        photo_url: photoUrl || null,
+        checked_by: user.id,
+        helpers: helpers || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "status_date" }
+    );
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/");
+  revalidatePath("/admin/today");
+  return { success: true };
+}
+
+export async function getTodaySaladSummary(): Promise<
+  { menuTitle: string; count: number }[]
+> {
+  const role = await getCallerRole();
+  if (!role || !ADMIN_ROLES.includes(role)) return [];
+
+  const todayStr = formatDateISO(getKSTDate());
+
+  const supabase = await createClient();
+
+  const [disabledResult, selectionsResult, deliveryDaysResult, assignmentsResult] =
+    await Promise.all([
+      supabase.from("profiles").select("id").eq("status", "disabled"),
+      supabase
+        .from("user_menu_selections")
+        .select(
+          "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+        )
+        .eq("delivery_date", todayStr),
+      supabase
+        .from("delivery_days")
+        .select("user_id, week_start, selected_days"),
+      supabase
+        .from("daily_menu_assignments")
+        .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
+        .eq("slot_type", "main")
+        .eq("delivery_date", todayStr),
+    ]);
+
+  const disabledUserIds = new Set(
+    (disabledResult.data ?? []).map((p: any) => p.id)
+  );
+
+  const activeSelections = (selectionsResult.data ?? []).filter(
+    (s: any) => !disabledUserIds.has(s.user_id)
+  );
+
+  const menuMap = new Map<string, { menuTitle: string; count: number }>();
+  for (const sel of activeSelections) {
+    const qty = (sel as any).quantity ?? 1;
+    const menu = (sel.daily_menu_assignment as any)?.menu;
+    if (!menu) continue;
+    const existing = menuMap.get(menu.id);
+    if (existing) {
+      existing.count += qty;
+    } else {
+      menuMap.set(menu.id, { menuTitle: menu.title, count: qty });
+    }
+  }
+
+  const subscribersToday = new Set<string>();
+  for (const dd of deliveryDaysResult.data ?? []) {
+    if (disabledUserIds.has(dd.user_id)) continue;
+    const weekStart = new Date(dd.week_start + "T00:00:00");
+    for (const dayNum of dd.selected_days) {
+      const dateObj = new Date(weekStart);
+      dateObj.setDate(weekStart.getDate() + (dayNum - 1));
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+      const d = String(dateObj.getDate()).padStart(2, "0");
+      if (`${y}-${m}-${d}` === todayStr) {
+        subscribersToday.add(dd.user_id);
+      }
+    }
+  }
+
+  const selectedUsersToday = new Set(activeSelections.map((s: any) => s.user_id));
+  const unselectedCount = Math.max(0, subscribersToday.size - selectedUsersToday.size);
+
+  if (unselectedCount > 0) {
+    const mainMenus = (assignmentsResult.data ?? [])
+      .map((a: any) => ({ id: a.menu?.id, title: a.menu?.title }))
+      .filter((m: any) => m.id);
+    if (mainMenus.length > 0) {
+      const perMenu = Math.floor(unselectedCount / mainMenus.length);
+      let remainder = unselectedCount % mainMenus.length;
+      for (const mm of mainMenus) {
+        const extra = remainder > 0 ? 1 : 0;
+        remainder--;
+        const addCount = perMenu + extra;
+        if (addCount === 0) continue;
+        const existing = menuMap.get(mm.id);
+        if (existing) {
+          existing.count += addCount;
+        } else {
+          menuMap.set(mm.id, { menuTitle: mm.title, count: addCount });
+        }
+      }
+    }
+  }
+
+  return Array.from(menuMap.values()).sort((a, b) => b.count - a.count);
 }

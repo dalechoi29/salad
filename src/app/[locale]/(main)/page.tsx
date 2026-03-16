@@ -23,13 +23,14 @@ import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { deliveryDaysToDateStrings, getTodayStr, getKSTDate, countSelectedDays, formatDateFull } from "@/lib/utils";
 import { getDailyMenusByDate, getMyMenuSelections } from "@/lib/actions/menu";
 import { getPickupStreak, getMyPickups } from "@/lib/actions/pickup";
-import { getSubscriptionDayCounts } from "@/lib/actions/admin";
+import { getSubscriptionDayCounts, getDailySaladStatus, getCompanyUsers } from "@/lib/actions/admin";
 import { getHolidays } from "@/lib/actions/holiday";
 import { Link } from "@/i18n/navigation";
 import { HomePickupCard } from "./home-pickup-card";
+import { HomeFridgeCard } from "./home-fridge-card";
 import { SubscriptionStatusView } from "./admin/subscription-status/subscription-status-view";
 import { HomeSkeleton } from "./home-skeleton";
-import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod, Holiday } from "@/types";
+import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod, Holiday, DailySaladStatus } from "@/types";
 
 function findCurrentSubscription(
   subscriptions: Subscription[],
@@ -133,6 +134,12 @@ async function HomePageContent() {
       ? (todaySelections[0].daily_menu_assignment as any)?.menu?.title ?? null
       : null;
 
+  const isAdmin = profile?.role === "admin" || profile?.role === "super_admin";
+  const [saladStatus, companyUsers] = await Promise.all([
+    getDailySaladStatus(todayStr),
+    isAdmin ? getCompanyUsers() : [],
+  ]);
+
   const subStatusProps = {
     currentPeriod: curPeriod,
     nextPeriod: nxtPeriod,
@@ -144,6 +151,7 @@ async function HomePageContent() {
   return (
     <HomeContent
       isLoggedIn={!!profile}
+      isAdmin={isAdmin}
       nickname={profile?.nickname ?? ""}
       period={period}
       subscription={subscription}
@@ -158,6 +166,9 @@ async function HomePageContent() {
       nextDeliveryMenus={nextDeliveryMenus}
       nextDeliverySelection={nextDeliverySelection}
       todaySelectedMenuName={todaySelectedMenuName}
+      saladStatus={saladStatus}
+      companyUsers={companyUsers as { id: string; realName: string }[]}
+      currentUserName={profile?.real_name ?? ""}
       subStatusProps={subStatusProps}
     />
   );
@@ -174,6 +185,7 @@ const DIETARY_LABELS: Record<string, string> = {
 
 function HomeContent({
   isLoggedIn,
+  isAdmin,
   nickname,
   period,
   subscription,
@@ -188,9 +200,13 @@ function HomeContent({
   nextDeliveryMenus,
   nextDeliverySelection,
   todaySelectedMenuName,
+  saladStatus,
+  companyUsers,
+  currentUserName,
   subStatusProps,
 }: {
   isLoggedIn: boolean;
+  isAdmin: boolean;
   nickname: string;
   period: any;
   subscription: any;
@@ -205,6 +221,9 @@ function HomeContent({
   nextDeliveryMenus: DailyMenu[];
   nextDeliverySelection: MenuSelection | null;
   todaySelectedMenuName: string | null;
+  saladStatus: DailySaladStatus | null;
+  companyUsers: { id: string; realName: string }[];
+  currentUserName: string;
   subStatusProps: {
     currentPeriod: SubscriptionPeriod | null;
     nextPeriod: SubscriptionPeriod | null;
@@ -352,12 +371,23 @@ function HomeContent({
       {/* Show subscription card at top during application/payment period */}
       {isActionablePeriod && !isPeriodPaid && subscriptionCard}
 
-      {isLoggedIn && (
+      {isLoggedIn && !todayConfirmed && (
         <HomePickupCard
           todayStr={todayStr}
           initialConfirmed={todayConfirmed}
           hasDeliveryToday={isMyDeliveryDay && todayMenus.length > 0}
           todayMenuName={todaySelectedMenuName}
+          adminCheckedIn={saladStatus?.is_checked ?? false}
+          saladLocation={saladStatus?.location ?? null}
+          todayMenus={todayMenus}
+        />
+      )}
+
+      {isAdmin && todayMenus.length > 0 && !saladStatus?.is_checked && (
+        <HomeFridgeCard
+          todayStr={todayStr}
+          companyUsers={companyUsers}
+          currentUserName={currentUserName}
         />
       )}
 

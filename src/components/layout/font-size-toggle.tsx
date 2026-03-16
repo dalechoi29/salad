@@ -45,7 +45,7 @@ export function FontSizeToggle() {
       )}
       title={size === "normal" ? "글꼴 크게" : size === "large" ? "글꼴 작게" : "글꼴 보통"}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="h-[1.3rem] w-[1.3rem]" />
       <span className="sr-only">글꼴 크기 변경</span>
     </button>
   );

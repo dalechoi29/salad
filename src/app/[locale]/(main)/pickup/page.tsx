@@ -1,6 +1,6 @@
 import { getSubscriptionPeriods } from "@/lib/actions/subscription";
 import { getMyPickups } from "@/lib/actions/pickup";
-import { getMyMenuSelections } from "@/lib/actions/menu";
+import { getMyMenuSelections, getDailyMenusByDate } from "@/lib/actions/menu";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import { PickupView } from "./pickup-view";
 
@@ -18,12 +18,13 @@ export default async function PickupPage() {
     if (p.delivery_end && p.delivery_end > rangeEnd) rangeEnd = p.delivery_end;
   }
 
-  const [pickups, selections] = await Promise.all([
+  const [pickups, selections, todayMenus] = await Promise.all([
     getMyPickups(rangeStart, rangeEnd),
     getMyMenuSelections(rangeStart, rangeEnd),
+    getDailyMenusByDate(todayISO),
   ]);
 
-  if (selections.length === 0) {
+  if (selections.length === 0 && todayMenus.length === 0) {
     return (
       <div className="mx-auto max-w-lg py-12 text-center text-muted-foreground">
         선택한 메뉴가 없습니다. 먼저 메뉴를 선택해주세요.
@@ -37,6 +38,8 @@ export default async function PickupPage() {
       selections={selections}
       deliveryStart={rangeStart}
       deliveryEnd={rangeEnd}
+      todayMenus={todayMenus}
+      todayStr={todayISO}
     />
   );
 }

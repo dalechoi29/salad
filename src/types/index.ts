@@ -113,6 +113,7 @@ export interface Pickup {
   pickup_date: string;
   confirmed: boolean;
   confirmed_at: string | null;
+  menu_id: string | null;
   created_at: string;
 }
 
@@ -180,4 +181,16 @@ export interface MenuFavorite {
 export interface AllowedDomain {
   id: string;
   domain: string;
+}
+
+export interface DailySaladStatus {
+  id: string;
+  status_date: string;
+  is_checked: boolean;
+  location: string | null;
+  photo_url: string | null;
+  checked_by: string | null;
+  helpers: string | null;
+  created_at: string;
+  updated_at: string;
 }

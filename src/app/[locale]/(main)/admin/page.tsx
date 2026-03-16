@@ -19,6 +19,7 @@ import {
   Settings,
   Leaf,
   CalendarCheck,
+  Salad,
 } from "lucide-react";
 
 interface AdminMenuItem {
@@ -80,6 +81,12 @@ const adminSections: AdminSection[] = [
         title: "사용자 관리",
         description: "사용자 승인, 비밀번호 설정, 도메인 관리",
         permission: "users.view",
+      },
+      {
+        href: "/admin/today",
+        icon: Salad,
+        title: "오늘의 샐러드",
+        description: "오늘 주문 현황, 냉장고 배치 관리",
       },
       {
         href: "/admin/subscriptions",

@@ -4,12 +4,9 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +17,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
-  Undo2,
   Star,
   Loader2,
   UtensilsCrossed,
@@ -31,7 +27,7 @@ import {
 import { Link, useRouter } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateShort, getTodayStr } from "@/lib/utils";
-import type { Pickup, MenuSelection, Review } from "@/types";
+import type { Pickup, MenuSelection, Review, DailyMenu } from "@/types";
 import { confirmPickup, undoPickup, getMyPickups } from "@/lib/actions/pickup";
 import { createReview, updateReview, deleteReview, getMyReviews } from "@/lib/actions/review";
 import { handleActionError } from "@/lib/handle-action-error";
@@ -47,6 +43,8 @@ interface PickupViewProps {
   selections: MenuSelection[];
   deliveryStart: string;
   deliveryEnd: string;
+  todayMenus: DailyMenu[];
+  todayStr: string;
 }
 
 export function PickupView({
@@ -54,6 +52,8 @@ export function PickupView({
   selections,
   deliveryStart,
   deliveryEnd,
+  todayMenus,
+  todayStr: serverTodayStr,
 }: PickupViewProps) {
   const [pickups, setPickups] = useState(initialPickups);
   const [confirmingDate, setConfirmingDate] = useState<string | null>(null);
@@ -72,6 +72,7 @@ export function PickupView({
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isEditingReview, setIsEditingReview] = useState(false);
   const [isDeletingReview, setIsDeletingReview] = useState(false);
+  const [undoingDate, setUndoingDate] = useState<string | null>(null);
 
   const router = useRouter();
   const todayStr = getTodayStr();
@@ -91,20 +92,63 @@ export function PickupView({
     ) ?? null;
   }
 
-  const allDeliveryDates = useMemo(
-    () =>
-      selections
-        .map((s) => ({
-          date: s.delivery_date,
-          menuId: (s.daily_menu_assignment as any)?.menu?.id ?? "",
-          menuTitle: (s.daily_menu_assignment as any)?.menu?.title ?? "메뉴",
-          menuImage: (s.daily_menu_assignment as any)?.menu?.image_url ?? null,
-          sauce: (s.daily_menu_assignment as any)?.menu?.sauce ?? "",
-        }))
-        .filter((d) => d.date && d.menuId)
-        .sort((a, b) => a.date.localeCompare(b.date)),
-    [selections]
-  );
+  type DeliveryItem = {
+    date: string;
+    menuId: string;
+    menuTitle: string;
+    menuImage: string | null;
+    sauce: string;
+    unselected?: boolean;
+    availableMenus?: DailyMenu[];
+  };
+
+  const allDeliveryDates = useMemo(() => {
+    const dateSet = new Set<string>();
+    const items: DeliveryItem[] = [];
+
+    for (const s of selections) {
+      const menu = (s.daily_menu_assignment as any)?.menu;
+      if (!s.delivery_date || !menu?.id) continue;
+      dateSet.add(s.delivery_date);
+      items.push({
+        date: s.delivery_date,
+        menuId: menu.id,
+        menuTitle: menu.title ?? "메뉴",
+        menuImage: menu.image_url ?? null,
+        sauce: menu.sauce ?? "",
+      });
+    }
+
+    if (todayMenus.length > 0 && !dateSet.has(serverTodayStr)) {
+      const todayPickup = pickups.find(
+        (p) => p.pickup_date === serverTodayStr && p.confirmed && p.menu_id
+      );
+      if (todayPickup?.menu_id) {
+        const matchedMenu = todayMenus.find(
+          (dm) => dm.menu?.id === todayPickup.menu_id
+        );
+        items.push({
+          date: serverTodayStr,
+          menuId: todayPickup.menu_id,
+          menuTitle: matchedMenu?.menu?.title ?? "메뉴",
+          menuImage: matchedMenu?.menu?.image_url ?? null,
+          sauce: matchedMenu?.menu?.sauce ?? "",
+        });
+      } else {
+        items.push({
+          date: serverTodayStr,
+          menuId: "",
+          menuTitle: "메뉴를 선택해주세요",
+          menuImage: null,
+          sauce: "",
+          unselected: true,
+          availableMenus: todayMenus,
+        });
+      }
+    }
+
+    return items.sort((a, b) => a.date.localeCompare(b.date));
+  }, [selections, todayMenus, serverTodayStr, pickups]);
 
   const availableMonths = useMemo(() => {
     const monthSet = new Set<string>();
@@ -171,10 +215,10 @@ export function PickupView({
     setPickups(data);
   }, [deliveryStart, deliveryEnd]);
 
-  async function handleConfirm(dateStr: string) {
+  async function doConfirm(dateStr: string, menuId?: string) {
     setConfirmingDate(dateStr);
     try {
-      const result = await confirmPickup(dateStr);
+      const result = await confirmPickup(dateStr, menuId);
       if (result.error) {
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
@@ -188,7 +232,7 @@ export function PickupView({
   }
 
   async function handleUndo(dateStr: string) {
-    setConfirmingDate(dateStr);
+    setUndoingDate(dateStr);
     try {
       const result = await undoPickup(dateStr);
       if (result.error) {
@@ -196,10 +240,10 @@ export function PickupView({
         toast.error(result.error);
         return;
       }
-      toast.success("취소되었습니다");
+      toast.success("픽업이 취소되었습니다");
       await refreshPickups();
     } finally {
-      setConfirmingDate(null);
+      setUndoingDate(null);
     }
   }
 
@@ -209,6 +253,7 @@ export function PickupView({
       setReviewRating(existing.rating);
       setReviewComment(existing.comment);
       setReviewImage(existing.image_url);
+      setIsEditingReview(false);
     } else {
       setReviewRating(5);
       setReviewComment("");
@@ -270,6 +315,13 @@ export function PickupView({
         );
       }
       if (result.error) {
+        if (result.error.includes("duplicate key") || result.error.includes("unique constraint")) {
+          toast.error("리뷰를 작성한 메뉴에요");
+          const refreshed = await getMyReviews();
+          setMyReviews(refreshed);
+          setReviewDialog((prev) => ({ ...prev, open: false }));
+          return;
+        }
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
@@ -367,6 +419,44 @@ export function PickupView({
             const isLoading = confirmingDate === item.date;
             const hasReview = !!getReviewForDate(item.menuId, item.date);
 
+            if (item.unselected && item.availableMenus) {
+              return (
+                <Card
+                  key={item.date}
+                  className="border-primary/30 bg-primary/5"
+                >
+                  <CardContent className="space-y-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {formatDateShort(item.date)}
+                      </span>
+                      {isToday && <Badge className="text-xs">오늘</Badge>}
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      어떤 메뉴 선택하셨어요?
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {item.availableMenus.map((dm) => (
+                        <Button
+                          key={dm.id}
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-sm"
+                          disabled={isLoading}
+                          onClick={() => doConfirm(item.date, dm.menu?.id)}
+                        >
+                          {isLoading && confirmingDate === item.date && (
+                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          )}
+                          {dm.menu?.title ?? "메뉴"}
+                        </Button>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            }
+
             return (
               <Card
                 key={item.date}
@@ -377,7 +467,7 @@ export function PickupView({
                       ? "border-primary/30 bg-primary/5"
                       : ""
                 }`}
-                onClick={() => router.push(`/menu/${item.menuId}`)}
+                onClick={() => item.menuId && router.push(`/menu/${item.menuId}`)}
               >
                 <CardContent className="flex items-center gap-3 py-3">
                   {item.menuImage ? (
@@ -418,6 +508,19 @@ export function PickupView({
                         <Button
                           size="sm"
                           variant="outline"
+                          className="h-8 px-3 text-sm text-muted-foreground"
+                          onClick={() => handleUndo(item.date)}
+                          disabled={undoingDate === item.date}
+                        >
+                          {undoingDate === item.date ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "픽업 취소"
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
                           className={`h-8 px-3 text-sm ${hasReview ? "text-yellow-600 border-yellow-300 dark:text-yellow-400 dark:border-yellow-700" : ""}`}
                           onClick={() =>
                             openReviewDialog(
@@ -429,15 +532,6 @@ export function PickupView({
                         >
                           {hasReview ? "리뷰 보기" : "리뷰하기"}
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 px-3 text-sm text-muted-foreground"
-                          onClick={() => handleUndo(item.date)}
-                          disabled={isLoading}
-                        >
-                          픽업 안함
-                        </Button>
                       </>
                     ) : canConfirm ? (
                       isLoading ? (
@@ -447,7 +541,7 @@ export function PickupView({
                           size="sm"
                           variant="outline"
                           className="h-8 px-3 text-sm"
-                          onClick={() => handleConfirm(item.date)}
+                          onClick={() => doConfirm(item.date)}
                         >
                           챙겼어요
                         </Button>
@@ -659,6 +753,7 @@ export function PickupView({
           )}
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }

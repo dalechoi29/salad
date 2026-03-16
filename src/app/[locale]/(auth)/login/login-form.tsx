@@ -102,6 +102,7 @@ export function LoginForm() {
         }
 
         toast.error(message);
+        setIsLoading(false);
         setTimeout(() => {
           if (passwordRef.current) {
             passwordRef.current.value = "";
@@ -115,7 +116,7 @@ export function LoginForm() {
       toast.success("환영해요! 건강한 끼니에요");
       router.push("/");
       router.refresh();
-    } finally {
+    } catch {
       setIsLoading(false);
     }
   }

@@ -5,7 +5,7 @@ export default function AuthLayout({
 }) {
   return (
     <div className="relative flex h-screen overflow-hidden">
-      <div className="flex h-full w-full items-center justify-center overflow-auto px-4 py-12 lg:w-1/2">
+      <div className="flex h-full w-full items-center justify-center px-4 lg:w-1/2">
         {children}
       </div>
 

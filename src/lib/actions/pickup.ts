@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import type { ActionResult, Pickup } from "@/types";
 
-export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
+export async function confirmPickup(pickupDate: string, menuId?: string): Promise<ActionResult> {
   const supabase = await createClient();
   const user = await getAuthUser();
 
@@ -18,10 +18,16 @@ export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
     .eq("pickup_date", pickupDate)
     .single();
 
+  const updateData: Record<string, unknown> = {
+    confirmed: true,
+    confirmed_at: new Date().toISOString(),
+  };
+  if (menuId) updateData.menu_id = menuId;
+
   if (existing) {
     const { error } = await supabase
       .from("pickups")
-      .update({ confirmed: true, confirmed_at: new Date().toISOString() })
+      .update(updateData)
       .eq("id", existing.id);
 
     if (error) return { error: error.message };
@@ -29,8 +35,7 @@ export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
     const { error } = await supabase.from("pickups").insert({
       user_id: user.id,
       pickup_date: pickupDate,
-      confirmed: true,
-      confirmed_at: new Date().toISOString(),
+      ...updateData,
     });
 
     if (error) return { error: error.message };
