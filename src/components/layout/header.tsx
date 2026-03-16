@@ -4,6 +4,7 @@ import { Sprout, LogOut } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import { FontSizeToggle } from "@/components/layout/font-size-toggle";
 
 import { useUser } from "@/components/providers/user-provider";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ export function Header() {
 
   async function handleLogout() {
     await logout();
-    router.replace("/login");
+    router.replace("/");
   }
 
   return (
@@ -29,6 +30,7 @@ export function Header() {
         </Link>
         <div className="hidden md:block" />
         <div className="flex items-center gap-1">
+          <FontSizeToggle />
           <ThemeToggle />
           {user && (
             <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleLogout}>

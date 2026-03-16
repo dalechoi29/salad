@@ -4,6 +4,189 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types";
 
+const ADMIN_ROLES = ["admin", "super_admin"];
+const SUPER_ADMIN_ROLES = ["super_admin"];
+
+async function getCallerRole(): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  return data?.role ?? null;
+}
+
+function isAnyAdmin(role: string | null): boolean {
+  return !!role && ADMIN_ROLES.includes(role);
+}
+
+function isSuperAdmin(role: string | null): boolean {
+  return !!role && SUPER_ADMIN_ROLES.includes(role);
+}
+
+async function hasPermission(permission: string): Promise<boolean> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (profile?.role === "super_admin") return true;
+  if (profile?.role !== "admin") return false;
+
+  const { data } = await supabase
+    .from("admin_permissions")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("permission", permission)
+    .limit(1);
+
+  return (data?.length ?? 0) > 0;
+}
+
+export async function getCallerAdminRole(): Promise<"super_admin" | "admin" | null> {
+  const role = await getCallerRole();
+  if (!role) return null;
+  if (role === "super_admin") return "super_admin";
+  if (role === "admin") return "admin";
+  return null;
+}
+
+// ─── Permission System ──────────────────────────────────────
+
+import { ALL_PERMISSIONS } from "@/lib/permissions";
+
+export async function getUserPermissions(userId: string): Promise<string[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("admin_permissions")
+    .select("permission")
+    .eq("user_id", userId);
+  return (data ?? []).map((r: any) => r.permission);
+}
+
+export async function getMyPermissions(): Promise<string[]> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (profile?.role === "super_admin") {
+    return ALL_PERMISSIONS.map((p) => p.key);
+  }
+  if (profile?.role !== "admin") return [];
+
+  return getUserPermissions(user.id);
+}
+
+export async function updateUserPermissions(
+  userId: string,
+  permissions: string[]
+): Promise<ActionResult> {
+  const role = await getCallerRole();
+  if (!isSuperAdmin(role)) return { error: "권한이 없습니다" };
+
+  const supabase = await createClient();
+
+  await supabase.from("admin_permissions").delete().eq("user_id", userId);
+
+  if (permissions.length > 0) {
+    const rows = permissions.map((permission) => ({
+      user_id: userId,
+      permission,
+    }));
+    const { error } = await supabase.from("admin_permissions").insert(rows);
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/admin/roles");
+  return { success: true };
+}
+
+export async function getAdminUsersList(): Promise<
+  { id: string; realName: string; email: string; role: string; permissions: string[] }[]
+> {
+  const role = await getCallerRole();
+  if (!isSuperAdmin(role)) return [];
+
+  const supabase = await createClient();
+  const { data: admins } = await supabase
+    .from("profiles")
+    .select("id, real_name, email, role")
+    .eq("role", "admin")
+    .order("real_name");
+
+  if (!admins?.length) return [];
+
+  const ids = admins.map((a: any) => a.id);
+  const { data: perms } = await supabase
+    .from("admin_permissions")
+    .select("user_id, permission")
+    .in("user_id", ids);
+
+  const permMap = new Map<string, string[]>();
+  for (const p of perms ?? []) {
+    const list = permMap.get(p.user_id) ?? [];
+    list.push(p.permission);
+    permMap.set(p.user_id, list);
+  }
+
+  return admins.map((a: any) => ({
+    id: a.id,
+    realName: a.real_name,
+    email: a.email,
+    role: a.role,
+    permissions: permMap.get(a.id) ?? [],
+  }));
+}
+
+export async function promoteToAdmin(userId: string): Promise<ActionResult> {
+  const role = await getCallerRole();
+  if (!isSuperAdmin(role)) return { error: "권한이 없습니다" };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: "admin" })
+    .eq("id", userId)
+    .eq("role", "user");
+
+  if (error) return { error: error.message };
+  revalidatePath("/admin/roles");
+  return { success: true };
+}
+
+export async function demoteFromAdmin(userId: string): Promise<ActionResult> {
+  const role = await getCallerRole();
+  if (!isSuperAdmin(role)) return { error: "권한이 없습니다" };
+
+  const supabase = await createClient();
+
+  await supabase.from("admin_permissions").delete().eq("user_id", userId);
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: "user" })
+    .eq("id", userId)
+    .eq("role", "admin");
+
+  if (error) return { error: error.message };
+  revalidatePath("/admin/roles");
+  return { success: true };
+}
+
 // ─── Admin Settings ─────────────────────────────────────────
 
 export async function getAdminSettings(): Promise<Record<string, string>> {
@@ -28,18 +211,9 @@ export async function updateAdminSetting(
   key: string,
   value: string
 ): Promise<ActionResult> {
+  if (!(await hasPermission("settings"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return { error: "권한이 없습니다" };
-  }
-
   const { error } = await supabase
     .from("admin_settings")
     .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -57,6 +231,8 @@ export async function approveUser(
   if (!password || password.length !== 4 || !/^\d{4}$/.test(password)) {
     return { error: "Password must be exactly 4 digits" };
   }
+
+  if (!(await hasPermission("users.approve"))) return { error: "권한이 없습니다" };
 
   const supabase = await createClient();
 
@@ -82,18 +258,9 @@ export async function resetUserPassword(
     return { error: "비밀번호는 4자리 숫자여야 합니다" };
   }
 
+  if (!(await hasPermission("users.reset_password"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return { error: "권한이 없습니다" };
-  }
-
   const { error } = await supabase.rpc("reset_user_password", {
     target_user_id: userId,
     new_password: password,
@@ -108,17 +275,9 @@ export async function resetUserPassword(
 }
 
 export async function disableUser(userId: string): Promise<ActionResult> {
+  if (!(await hasPermission("users.disable"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return { error: "Unauthorized" };
-  }
 
   const { error } = await supabase
     .from("profiles")
@@ -134,17 +293,9 @@ export async function disableUser(userId: string): Promise<ActionResult> {
 }
 
 export async function enableUser(userId: string): Promise<ActionResult> {
+  if (!(await hasPermission("users.disable"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return { error: "권한이 없습니다" };
-  }
 
   const { error } = await supabase
     .from("profiles")
@@ -160,18 +311,9 @@ export async function enableUser(userId: string): Promise<ActionResult> {
 }
 
 export async function deleteUser(userId: string): Promise<ActionResult> {
+  if (!(await hasPermission("users.delete"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return { error: "권한이 없습니다" };
-  }
-
   const { data: target } = await supabase
     .from("profiles")
     .select("status")
@@ -204,18 +346,9 @@ export async function deleteUser(userId: string): Promise<ActionResult> {
 }
 
 export async function getAllUsers() {
+  if (!(await hasPermission("users.view"))) return [];
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
-    return [];
-  }
-
   const { data: users } = await supabase
     .from("profiles")
     .select("*")
@@ -291,21 +424,15 @@ export interface DashboardStats {
 export async function getDashboardStats(
   periodId?: string
 ): Promise<DashboardStats> {
-  const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") {
+  if (!(await hasPermission("dashboard"))) {
     return {
       totalUsers: 0, approvedUsers: 0, activeSubscribers: 0,
       paidSubscribers: 0, totalPickups: 0, totalDeliveries: 0,
       pickupRate: 0, menuPopularity: [], dailyDeliveries: [],
     };
   }
+
+  const supabase = await createClient();
 
   const { count: totalUsers } = await supabase
     .from("profiles")
@@ -405,15 +532,9 @@ export async function getVendorReport(
   startDate: string,
   endDate: string
 ): Promise<VendorReportRow[]> {
+  if (!(await hasPermission("vendor_report"))) return [];
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") return [];
 
   const { data: disabledProfiles } = await supabase
     .from("profiles")
@@ -551,15 +672,9 @@ export async function getAdminPosts(
   limit = 50,
   offset = 0
 ): Promise<{ posts: any[]; total: number }> {
+  if (!(await hasPermission("community"))) return { posts: [], total: 0 };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") return { posts: [], total: 0 };
 
   const { count } = await supabase
     .from("posts")
@@ -589,15 +704,9 @@ export async function getAdminComments(
 }
 
 export async function adminDeletePost(postId: string): Promise<ActionResult> {
+  if (!(await hasPermission("community"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") return { error: "Unauthorized" };
 
   const { error } = await supabase.from("posts").delete().eq("id", postId);
   if (error) return { error: error.message };
@@ -608,15 +717,9 @@ export async function adminDeletePost(postId: string): Promise<ActionResult> {
 }
 
 export async function adminDeleteComment(commentId: string): Promise<ActionResult> {
+  if (!(await hasPermission("community"))) return { error: "권한이 없습니다" };
+
   const supabase = await createClient();
-
-  const { data: adminProfile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
-    .single();
-
-  if (adminProfile?.role !== "admin") return { error: "Unauthorized" };
 
   const { error } = await supabase.from("comments").delete().eq("id", commentId);
   if (error) return { error: error.message };

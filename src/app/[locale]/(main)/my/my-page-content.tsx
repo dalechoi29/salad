@@ -7,7 +7,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -160,7 +161,7 @@ export function MyPageContent({
   async function handleLogout() {
     setIsLoggingOut(true);
     await logout();
-    router.replace("/login");
+    router.replace("/");
   }
 
   return (
@@ -205,11 +206,11 @@ export function MyPageContent({
           {subscriptions.map((entry) => (
             <SubscriptionCard key={entry.subscription.id} entry={entry} />
           ))}
-          <Link href="/my/subscriptions" className="block mt-3">
-            <Button variant="outline" className="w-full">
-              구독 이력 보기 ({subscriptions.length})
-            </Button>
-          </Link>
+          {subscriptions.length > 1 && (
+            <Link href="/my/subscriptions" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
+              구독 이력 보기
+            </Link>
+          )}
         </div>
       ) : (
         <Link href="/subscription" className="block">
@@ -260,10 +261,8 @@ export function MyPageContent({
               </CardContent>
             </Card>
             {favorites.length > 1 && (
-              <Link href="/my/favorites" className="block mt-3">
-                <Button variant="outline" className="w-full">
-                  더보기 ({favorites.length})
-                </Button>
+              <Link href="/my/favorites" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
+                더보기
               </Link>
             )}
           </>
@@ -298,10 +297,8 @@ export function MyPageContent({
               />
             ))}
             {reviews.length > 1 && (
-              <Link href="/my/reviews" className="block mt-3">
-                <Button variant="outline" className="w-full">
-                  더보기 ({reviews.length})
-                </Button>
+              <Link href="/my/reviews" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
+                더보기
               </Link>
             )}
           </div>
@@ -335,10 +332,8 @@ export function MyPageContent({
               />
             ))}
             {posts.length > 1 && (
-              <Link href="/my/posts" className="block mt-3">
-                <Button variant="outline" className="w-full">
-                  더보기 ({posts.length})
-                </Button>
+              <Link href="/my/posts" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
+                더보기
               </Link>
             )}
           </div>
@@ -346,7 +341,7 @@ export function MyPageContent({
       </div>
 
       {/* Password Change, Logout & Admin */}
-      <div className={`grid gap-2 ${profile?.role === "admin" ? "grid-cols-3" : "grid-cols-2"}`}>
+      <div className={`grid gap-2 ${["admin", "super_admin"].includes(profile?.role ?? "") ? "grid-cols-3" : "grid-cols-2"}`}>
         <Button
           variant="ghost"
           className="text-muted-foreground"
@@ -368,7 +363,7 @@ export function MyPageContent({
           )}
           로그아웃
         </Button>
-        {profile?.role === "admin" && (
+        {["admin", "super_admin"].includes(profile?.role ?? "") && (
           <Link href="/admin" className="block">
             <Button variant="ghost" className="w-full text-muted-foreground hover:text-primary">
               <Shield className="mr-2 h-4 w-4" />

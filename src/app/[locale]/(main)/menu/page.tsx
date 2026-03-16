@@ -1,8 +1,10 @@
+import { Suspense } from "react";
 import { getMySubscriptions } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { getMenuSelectionCutoff } from "@/lib/actions/admin";
 import { deliveryDaysToDateStrings, formatDateISO, getKSTDate } from "@/lib/utils";
 import { MenuSelectionView } from "./menu-selection-view";
+import { MenuSkeleton } from "./menu-skeleton";
 import type { Subscription, SubscriptionPeriod } from "@/types";
 
 function findSubscriptionForMonth(
@@ -23,9 +25,15 @@ function findSubscriptionForMonth(
   return subscriptions[0] ?? null;
 }
 
-export default async function MenuPage() {
-  const allSubscriptions = await getMySubscriptions();
+export default function MenuPage() {
+  return (
+    <Suspense fallback={<MenuSkeleton />}>
+      <MenuPageContent />
+    </Suspense>
+  );
+}
 
+async function MenuPageContent() {
   const today = getKSTDate();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
   const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
@@ -33,6 +41,11 @@ export default async function MenuPage() {
   const rangeStart = formatDateISO(monthStart);
   const rangeEnd = formatDateISO(monthEnd);
   const todayStr = formatDateISO(today);
+
+  const [allSubscriptions, cutoff] = await Promise.all([
+    getMySubscriptions(),
+    getMenuSelectionCutoff(),
+  ]);
 
   const subscription = findSubscriptionForMonth(allSubscriptions, rangeStart, rangeEnd);
 
@@ -42,8 +55,6 @@ export default async function MenuPage() {
     const days = await getMyDeliveryDays(subscription.id);
     myDeliveryDates = deliveryDaysToDateStrings(days);
   }
-
-  const cutoff = await getMenuSelectionCutoff();
 
   return (
     <MenuSelectionView

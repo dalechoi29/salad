@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ export function LoginForm() {
   const [email, setEmail] = useState("");
   const [domains, setDomains] = useState<string[]>([]);
   const [showSuggestion, setShowSuggestion] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -29,8 +30,14 @@ export function LoginForm() {
     });
   }, []);
 
+  const filteredDomains = useMemo(() => {
+    const typed = email.split("@")[1] ?? "";
+    return domains.filter((d) => d.startsWith(typed));
+  }, [domains, email]);
+
   function handleEmailChange(value: string) {
     setEmail(value);
+    setHighlightIdx(-1);
     if (value.includes("@") && !value.split("@")[1]?.includes(".")) {
       setShowSuggestion(true);
     } else {
@@ -42,11 +49,36 @@ export function LoginForm() {
     const localPart = email.split("@")[0];
     setEmail(`${localPart}@${domain}`);
     setShowSuggestion(false);
+    setHighlightIdx(-1);
     passwordRef.current?.focus();
   }
 
-  async function handleSubmit(formData: FormData) {
+  function handleEmailKeyDown(e: React.KeyboardEvent) {
+    if (!showSuggestion || filteredDomains.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIdx((prev) =>
+        prev < filteredDomains.length - 1 ? prev + 1 : 0
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx((prev) =>
+        prev > 0 ? prev - 1 : filteredDomains.length - 1
+      );
+    } else if (e.key === "Enter" && highlightIdx >= 0) {
+      e.preventDefault();
+      applySuggestion(filteredDomains[highlightIdx]);
+    } else if (e.key === "Escape") {
+      setShowSuggestion(false);
+      setHighlightIdx(-1);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     setIsLoading(true);
+    const formData = new FormData(e.currentTarget);
     const submittedEmail = formData.get("email") as string;
     setEmail(submittedEmail);
 
@@ -97,7 +129,7 @@ export function LoginForm() {
         </div>
       </div>
 
-      <form action={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">{t("email")}</Label>
@@ -108,29 +140,26 @@ export function LoginForm() {
                 type="email"
                 value={email}
                 onChange={(e) => handleEmailChange(e.target.value)}
-                onBlur={() => setTimeout(() => setShowSuggestion(false), 150)}
+                onKeyDown={handleEmailKeyDown}
+                onBlur={() => setTimeout(() => { setShowSuggestion(false); setHighlightIdx(-1); }, 150)}
                 placeholder={t("emailPlaceholder")}
                 required
                 autoComplete="off"
               />
-              {showSuggestion && domains.length > 0 && (
+              {showSuggestion && filteredDomains.length > 0 && (
                 <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border bg-popover shadow-md">
-                  {domains
-                    .filter((d) => {
-                      const typed = email.split("@")[1] ?? "";
-                      return d.startsWith(typed);
-                    })
-                    .map((domain) => (
-                      <button
-                        key={domain}
-                        type="button"
-                        className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => applySuggestion(domain)}
-                      >
-                        {email.split("@")[0]}@{domain}
-                      </button>
-                    ))}
+                  {filteredDomains.map((domain, idx) => (
+                    <button
+                      key={domain}
+                      type="button"
+                      className={`flex w-full items-center px-3 py-2 text-sm ${idx === highlightIdx ? "bg-accent" : "hover:bg-accent"}`}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => applySuggestion(domain)}
+                      onMouseEnter={() => setHighlightIdx(idx)}
+                    >
+                      {email.split("@")[0]}@{domain}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -155,16 +184,18 @@ export function LoginForm() {
         <div className="space-y-3">
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {t("login")}
+            {isLoading ? "로그인 중..." : t("login")}
           </Button>
-          <p className="text-center text-sm text-muted-foreground">
-            <Link
-              href="/signup"
-              className="text-primary underline-offset-4 hover:underline"
-            >
-              {t("signup")}
-            </Link>
-          </p>
+          {!isLoading && (
+            <p className="text-center text-sm text-muted-foreground">
+              <Link
+                href="/signup"
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                {t("signup")}
+              </Link>
+            </p>
+          )}
         </div>
       </form>
     </div>

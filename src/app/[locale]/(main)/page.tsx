@@ -255,7 +255,9 @@ function HomeContent({
   };
 
   let subscriptionCardSubtitle: string | null = null;
-  if (isPayingPeriod && !isPeriodPaid) {
+  if (isPayingPeriod && !hasPeriodSub) {
+    subscriptionCardSubtitle = "구독 신청 후, 결제를 진행해주세요";
+  } else if (isPayingPeriod && !isPeriodPaid) {
     subscriptionCardSubtitle = "결제하고 '결제 완료 신청'을 눌러주세요";
   } else if (hasPeriodSub && !isPeriodPaid && period?.pay_start) {
     subscriptionCardSubtitle = formatPayStart(period.pay_start);
@@ -321,26 +323,29 @@ function HomeContent({
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div className="flex items-start justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">
-          {isLoggedIn ? t("welcome", { name: nickname }) : "로그인이 필요해요"}
-        </h1>
-        {isLoggedIn ? (
+      {isLoggedIn ? (
+        <div className="flex items-start justify-between">
+          <h1 className="text-2xl font-bold tracking-tight">
+            {t("welcome", { name: nickname })}
+          </h1>
           <div className="flex items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1 dark:bg-orange-900/20">
             <Flame className="h-4 w-4 text-orange-500" />
             <span className="text-sm font-medium text-orange-600 dark:text-orange-400">
               {streak}일 연속 수령
             </span>
           </div>
-        ) : (
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold tracking-tight">로그인이 필요해요</h1>
           <Link href="/login">
             <Button size="sm" className="gap-1.5">
               <LogIn className="h-4 w-4" />
               로그인
             </Button>
           </Link>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Show subscription card at top during application/payment period */}
       {isActionablePeriod && !isPeriodPaid && subscriptionCard}

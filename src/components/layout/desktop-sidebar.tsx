@@ -31,7 +31,7 @@ export function DesktopSidebar() {
   const tCommon = useTranslations("common");
   const pathname = usePathname();
   const { user } = useUser();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 border-r bg-background md:block">

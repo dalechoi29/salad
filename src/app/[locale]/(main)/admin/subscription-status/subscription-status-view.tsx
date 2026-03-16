@@ -260,7 +260,7 @@ function MonthCalendar({
                     {dateNum}
                   </span>
                   {isHoliday && hName ? (
-                    <span className="w-full truncate text-center text-[9px] leading-tight">
+                    <span className="w-full text-center text-[11px] leading-tight line-clamp-2">
                       {hName}
                     </span>
                   ) : outOfRange ? (
@@ -309,7 +309,7 @@ function MonthCalendar({
               구독자가 없습니다
             </p>
           ) : (
-            <div className="max-h-64 space-y-1 overflow-y-auto">
+            <div className="max-h-[60vh] space-y-1 overflow-y-auto">
               {dialogUsers.map((u, idx) => (
                 <div
                   key={u.userId}
@@ -327,9 +327,15 @@ function MonthCalendar({
             </div>
           )}
           <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground">
-            <span>총 {dialogUsers.length}명</span>
-            <span>·</span>
-            <span>샐러드 총 {dialogUsers.reduce((sum, u) => sum + u.saladsPerDelivery, 0)}개</span>
+            {dialogLoading ? (
+              <Skeleton className="h-4 w-40" />
+            ) : (
+              <>
+                <span>총 {dialogUsers.length}명</span>
+                <span>·</span>
+                <span>샐러드 총 {dialogUsers.reduce((sum, u) => sum + u.saladsPerDelivery, 0)}개</span>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>

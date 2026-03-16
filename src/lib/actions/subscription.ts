@@ -361,14 +361,16 @@ export async function adminUpdateSubscriptionPayment(
 ): Promise<ActionResult> {
   const supabase = await createClient();
 
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Unauthorized" };
   const { data: adminProfile } = await supabase
     .from("profiles")
     .select("role")
-    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .eq("id", user.id)
     .single();
 
-  if (adminProfile?.role !== "admin") {
-    return { error: "Unauthorized" };
+  if (!adminProfile?.role || !["admin", "super_admin"].includes(adminProfile.role)) {
+    return { error: "권한이 없습니다" };
   }
 
   const { error } = await supabase

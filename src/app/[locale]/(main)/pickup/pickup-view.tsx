@@ -20,7 +20,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
-  Check,
   Undo2,
   Star,
   Loader2,
@@ -34,7 +33,7 @@ import { createClient } from "@/lib/supabase/client";
 import { formatDateShort, getTodayStr } from "@/lib/utils";
 import type { Pickup, MenuSelection, Review } from "@/types";
 import { confirmPickup, undoPickup, getMyPickups } from "@/lib/actions/pickup";
-import { createReview, getMyReviews } from "@/lib/actions/review";
+import { createReview, updateReview, deleteReview, getMyReviews } from "@/lib/actions/review";
 import { handleActionError } from "@/lib/handle-action-error";
 
 const PAGE_SIZE = 15;
@@ -71,6 +70,8 @@ export function PickupView({
   const [reviewImage, setReviewImage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [isEditingReview, setIsEditingReview] = useState(false);
+  const [isDeletingReview, setIsDeletingReview] = useState(false);
 
   const router = useRouter();
   const todayStr = getTodayStr();
@@ -255,25 +256,61 @@ export function PickupView({
   async function handleSubmitReview() {
     setIsSubmittingReview(true);
     try {
-      const result = await createReview(
-        reviewDialog.menuId,
-        reviewDialog.pickupDate,
-        reviewRating,
-        reviewComment,
-        reviewImage
-      );
+      const existing = reviewDialog.existingReview;
+      let result;
+      if (existing && isEditingReview) {
+        result = await updateReview(existing.id, reviewRating, reviewComment, reviewImage);
+      } else {
+        result = await createReview(
+          reviewDialog.menuId,
+          reviewDialog.pickupDate,
+          reviewRating,
+          reviewComment,
+          reviewImage
+        );
+      }
       if (result.error) {
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
-      toast.success("리뷰가 등록되었습니다");
+      toast.success(isEditingReview ? "리뷰가 수정되었습니다" : "리뷰가 등록되었습니다");
       const refreshed = await getMyReviews();
       setMyReviews(refreshed);
+      setIsEditingReview(false);
       setReviewDialog({ open: false, menuId: "", menuTitle: "", pickupDate: "", existingReview: null });
     } finally {
       setIsSubmittingReview(false);
     }
+  }
+
+  async function handleDeleteReview() {
+    const existing = reviewDialog.existingReview;
+    if (!existing) return;
+    setIsDeletingReview(true);
+    try {
+      const result = await deleteReview(existing.id);
+      if (result.error) {
+        if (handleActionError(result.error, router)) return;
+        toast.error(result.error);
+        return;
+      }
+      toast.success("리뷰가 삭제되었습니다");
+      const refreshed = await getMyReviews();
+      setMyReviews(refreshed);
+      setReviewDialog({ open: false, menuId: "", menuTitle: "", pickupDate: "", existingReview: null });
+    } finally {
+      setIsDeletingReview(false);
+    }
+  }
+
+  function startEditReview() {
+    const existing = reviewDialog.existingReview;
+    if (!existing) return;
+    setReviewRating(existing.rating);
+    setReviewComment(existing.comment);
+    setReviewImage(existing.image_url);
+    setIsEditingReview(true);
   }
 
   return (
@@ -328,27 +365,29 @@ export function PickupView({
             const isToday = item.date === todayStr;
             const canConfirm = isPast(item.date);
             const isLoading = confirmingDate === item.date;
+            const hasReview = !!getReviewForDate(item.menuId, item.date);
 
             return (
               <Card
                 key={item.date}
-                className={
+                className={`cursor-pointer transition-colors active:bg-accent/50 ${
                   isConfirmed
                     ? "border-green-500/30 bg-green-50/30 dark:bg-green-900/10"
                     : isToday
                       ? "border-primary/30 bg-primary/5"
                       : ""
-                }
+                }`}
+                onClick={() => router.push(`/menu/${item.menuId}`)}
               >
                 <CardContent className="flex items-center gap-3 py-3">
                   {item.menuImage ? (
-                    <Link href={`/menu/${item.menuId}`} className="flex-shrink-0">
+                    <div className="flex-shrink-0">
                       <img
                         src={item.menuImage}
                         alt={item.menuTitle}
                         className="h-14 w-14 rounded-lg object-cover"
                       />
-                    </Link>
+                    </div>
                   ) : (
                     <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-muted">
                       <UtensilsCrossed className="h-5 w-5 text-muted-foreground" />
@@ -370,59 +409,55 @@ export function PickupView({
                     </p>
                   </div>
 
-                  <div className="flex flex-shrink-0 items-center gap-1.5">
+                  <div
+                    className="flex flex-shrink-0 items-center gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {isConfirmed ? (
                       <>
-                        {(() => {
-                          const hasReview = !!getReviewForDate(item.menuId, item.date);
-                          return (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className={`h-8 text-sm ${hasReview ? "text-yellow-500" : "text-muted-foreground"}`}
-                              onClick={() =>
-                                openReviewDialog(
-                                  item.menuId,
-                                  item.menuTitle,
-                                  item.date
-                                )
-                              }
-                            >
-                              <Star className={`mr-1 h-3.5 w-3.5 ${hasReview ? "fill-yellow-400" : ""}`} />
-                              {hasReview ? "리뷰 보기" : "리뷰"}
-                            </Button>
-                          );
-                        })()}
                         <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8 text-muted-foreground"
+                          size="sm"
+                          variant="outline"
+                          className={`h-8 px-3 text-sm ${hasReview ? "text-yellow-600 border-yellow-300 dark:text-yellow-400 dark:border-yellow-700" : ""}`}
+                          onClick={() =>
+                            openReviewDialog(
+                              item.menuId,
+                              item.menuTitle,
+                              item.date
+                            )
+                          }
+                        >
+                          {hasReview ? "리뷰 보기" : "리뷰하기"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3 text-sm text-muted-foreground"
                           onClick={() => handleUndo(item.date)}
                           disabled={isLoading}
                         >
-                          <Undo2 className="h-3.5 w-3.5" />
+                          픽업 안함
                         </Button>
                       </>
                     ) : canConfirm ? (
-                      <Button
-                        size="sm"
-                        className="h-8 text-sm"
-                        onClick={() => handleConfirm(item.date)}
-                        disabled={isLoading}
-                      >
-                        {isLoading ? (
-                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Check className="mr-1 h-3.5 w-3.5" />
-                        )}
-                        챙겼어요
-                      </Button>
+                      isLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3 text-sm"
+                          onClick={() => handleConfirm(item.date)}
+                        >
+                          챙겼어요
+                        </Button>
+                      )
                     ) : (
                       <Badge
                         variant="outline"
                         className="text-xs text-muted-foreground"
                       >
-                        예정
+                        배송 예정
                       </Badge>
                     )}
                   </div>
@@ -436,18 +471,21 @@ export function PickupView({
 
       <Dialog
         open={reviewDialog.open}
-        onOpenChange={(open) =>
-          setReviewDialog((prev) => ({ ...prev, open }))
-        }
+        onOpenChange={(open) => {
+          if (!open) setIsEditingReview(false);
+          setReviewDialog((prev) => ({ ...prev, open }));
+        }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {reviewDialog.existingReview ? "내 리뷰" : "리뷰 작성"}
+              {reviewDialog.existingReview
+                ? isEditingReview ? "리뷰 수정" : "내 리뷰"
+                : "리뷰 작성"}
             </DialogTitle>
           </DialogHeader>
 
-          {reviewDialog.existingReview ? (
+          {reviewDialog.existingReview && !isEditingReview ? (
             <div className="space-y-4 pt-2">
               <p className="text-sm text-muted-foreground">
                 {reviewDialog.menuTitle} · {formatDateShort(reviewDialog.pickupDate)}
@@ -488,15 +526,34 @@ export function PickupView({
                 })}에 작성됨
               </p>
 
-              <div className="flex justify-end">
+              <div className="flex justify-between">
                 <Button
                   variant="outline"
-                  onClick={() =>
-                    setReviewDialog((prev) => ({ ...prev, open: false }))
-                  }
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={handleDeleteReview}
+                  disabled={isDeletingReview}
                 >
-                  닫기
+                  {isDeletingReview && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+                  삭제
                 </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setReviewDialog((prev) => ({ ...prev, open: false }))
+                    }
+                  >
+                    닫기
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={startEditReview}
+                  >
+                    수정
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (
@@ -578,9 +635,13 @@ export function PickupView({
               <div className="flex justify-end gap-2 pt-2">
                 <Button
                   variant="outline"
-                  onClick={() =>
-                    setReviewDialog((prev) => ({ ...prev, open: false }))
-                  }
+                  onClick={() => {
+                    if (isEditingReview) {
+                      setIsEditingReview(false);
+                    } else {
+                      setReviewDialog((prev) => ({ ...prev, open: false }));
+                    }
+                  }}
                 >
                   취소
                 </Button>
@@ -591,7 +652,7 @@ export function PickupView({
                   {isSubmittingReview && (
                     <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   )}
-                  리뷰 등록
+                  {isEditingReview ? "수정 완료" : "리뷰 등록"}
                 </Button>
               </div>
             </div>

@@ -356,7 +356,7 @@ export function MenuSelectionView({
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
-        <span className="text-sm font-medium">
+        <span className="text-base font-semibold">
           {currentWeekDates.length > 0 && (
             <>
               {formatDateShort(currentWeekDates[0])} ~{" "}

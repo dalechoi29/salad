@@ -1,12 +1,24 @@
-import { getAllUsers, getAllowedDomains } from "@/lib/actions/admin";
+import { getAllUsers, getAllowedDomains, getCallerAdminRole, getMyPermissions } from "@/lib/actions/admin";
 import { UserManagement } from "./user-management";
-import { useTranslations } from "next-intl";
+import { redirect } from "next/navigation";
 
 export default async function AdminUsersPage() {
-  const [users, domains] = await Promise.all([
+  const [users, domains, adminRole, permissions] = await Promise.all([
     getAllUsers(),
     getAllowedDomains(),
+    getCallerAdminRole(),
+    getMyPermissions(),
   ]);
 
-  return <UserManagement initialUsers={users} initialDomains={domains} />;
+  if (!adminRole || !permissions.includes("users.view")) {
+    redirect("/admin");
+  }
+
+  return (
+    <UserManagement
+      initialUsers={users}
+      initialDomains={domains}
+      permissions={permissions}
+    />
+  );
 }

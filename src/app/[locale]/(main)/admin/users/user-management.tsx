@@ -49,6 +49,7 @@ import type { Profile, AllowedDomain } from "@/types";
 interface UserManagementProps {
   initialUsers: Profile[];
   initialDomains: AllowedDomain[];
+  permissions: string[];
 }
 
 const statusLabels: Record<string, string> = {
@@ -63,10 +64,19 @@ const statusColors: Record<string, string> = {
   disabled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
 };
 
+const ADMIN_ROLES = ["admin", "super_admin"];
+
 export function UserManagement({
   initialUsers,
   initialDomains,
+  permissions,
 }: UserManagementProps) {
+  const permSet = new Set(permissions);
+  const canApprove = permSet.has("users.approve");
+  const canResetPassword = permSet.has("users.reset_password");
+  const canDisable = permSet.has("users.disable");
+  const canDelete = permSet.has("users.delete");
+  const canManageDomains = permSet.has("users.domains");
   const [users, setUsers] = useState(initialUsers);
   const [domains, setDomains] = useState(initialDomains);
   const [newDomain, setNewDomain] = useState("");
@@ -206,7 +216,7 @@ export function UserManagement({
       </div>
 
       {/* Allowed Domains */}
-      <Card>
+      {canManageDomains && <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Globe className="h-4 w-4" />
@@ -244,10 +254,10 @@ export function UserManagement({
             ))}
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Pending Users */}
-      {pendingUsers.length > 0 && (
+      {canApprove && pendingUsers.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -339,9 +349,9 @@ export function UserManagement({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="font-medium">{user.real_name}</p>
-                    {user.role === "admin" && (
+                    {ADMIN_ROLES.includes(user.role) && (
                       <Badge variant="default" className="text-xs">
-                        관리자
+                        {user.role === "super_admin" ? "최고 관리자" : "관리자"}
                       </Badge>
                     )}
                   </div>
@@ -355,76 +365,80 @@ export function UserManagement({
                   >
                     {statusLabels.approved}
                   </span>
-                  {user.role !== "admin" && (
+                  {!ADMIN_ROLES.includes(user.role) && (
                     <>
-                      <Dialog
-                        open={resetDialogUserId === user.id}
-                        onOpenChange={(open) => {
-                          setResetDialogUserId(open ? user.id : null);
-                          if (!open) setResetPassword("");
-                        }}
-                      >
-                        <DialogTrigger
-                          render={
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              title="비밀번호 재설정"
-                            />
-                          }
+                      {canResetPassword && (
+                        <Dialog
+                          open={resetDialogUserId === user.id}
+                          onOpenChange={(open) => {
+                            setResetDialogUserId(open ? user.id : null);
+                            if (!open) setResetPassword("");
+                          }}
                         >
-                          <KeyRound className="h-4 w-4" />
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>비밀번호 재설정</DialogTitle>
-                            <DialogDescription>
-                              {user.real_name}님의 새 4자리 비밀번호를 입력해주세요.
-                            </DialogDescription>
-                          </DialogHeader>
-                          <Input
-                            type="text"
-                            inputMode="numeric"
-                            maxLength={4}
-                            placeholder="4자리 숫자"
-                            value={resetPassword}
-                            onChange={(e) =>
-                              setResetPassword(e.target.value.replace(/\D/g, ""))
+                          <DialogTrigger
+                            render={
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="비밀번호 재설정"
+                              />
                             }
-                          />
-                          <DialogFooter>
-                            <DialogClose render={<Button variant="outline" />}>
-                              취소
-                            </DialogClose>
-                            <Button
-                              onClick={() => handleResetPassword(user.id)}
-                              disabled={
-                                resetPassword.length !== 4 ||
-                                loadingId === user.id
+                          >
+                            <KeyRound className="h-4 w-4" />
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>비밀번호 재설정</DialogTitle>
+                              <DialogDescription>
+                                {user.real_name}님의 새 4자리 비밀번호를 입력해주세요.
+                              </DialogDescription>
+                            </DialogHeader>
+                            <Input
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={4}
+                              placeholder="4자리 숫자"
+                              value={resetPassword}
+                              onChange={(e) =>
+                                setResetPassword(e.target.value.replace(/\D/g, ""))
                               }
-                            >
-                              {loadingId === user.id && (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              )}
-                              변경
-                            </Button>
-                          </DialogFooter>
-                        </DialogContent>
-                      </Dialog>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDisable(user.id)}
-                        disabled={loadingId === user.id}
-                        title="비활성화"
-                      >
-                        {loadingId === user.id &&
-                        resetDialogUserId !== user.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <UserX className="h-4 w-4" />
-                        )}
-                      </Button>
+                            />
+                            <DialogFooter>
+                              <DialogClose render={<Button variant="outline" />}>
+                                취소
+                              </DialogClose>
+                              <Button
+                                onClick={() => handleResetPassword(user.id)}
+                                disabled={
+                                  resetPassword.length !== 4 ||
+                                  loadingId === user.id
+                                }
+                              >
+                                {loadingId === user.id && (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                )}
+                                변경
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      )}
+                      {canDisable && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDisable(user.id)}
+                          disabled={loadingId === user.id}
+                          title="비활성화"
+                        >
+                          {loadingId === user.id &&
+                          resetDialogUserId !== user.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <UserX className="h-4 w-4" />
+                          )}
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -441,7 +455,7 @@ export function UserManagement({
       </Card>
 
       {/* Disabled Users */}
-      {disabledUsers.length > 0 && (
+      {canDisable && disabledUsers.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -480,34 +494,36 @@ export function UserManagement({
                       )}
                       활성화
                     </Button>
-                    <Dialog>
-                      <DialogTrigger render={<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" />}>
-                        <Trash2 className="h-4 w-4" />
-                      </DialogTrigger>
-                      <DialogContent>
-                        <DialogHeader>
-                          <DialogTitle>사용자 삭제</DialogTitle>
-                          <DialogDescription>
-                            {user.real_name} ({user.email}) 계정을 삭제하시겠어요? 이 작업은 되돌릴 수 없습니다.
-                          </DialogDescription>
-                        </DialogHeader>
-                        <DialogFooter>
-                          <DialogClose render={<Button variant="outline" />}>
-                            취소
-                          </DialogClose>
-                          <Button
-                            variant="destructive"
-                            onClick={() => handleDelete(user.id)}
-                            disabled={loadingId === user.id}
-                          >
-                            {loadingId === user.id && (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            )}
-                            삭제
-                          </Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
+                    {canDelete && (
+                      <Dialog>
+                        <DialogTrigger render={<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" />}>
+                          <Trash2 className="h-4 w-4" />
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>사용자 삭제</DialogTitle>
+                            <DialogDescription>
+                              {user.real_name} ({user.email}) 계정을 삭제하시겠어요? 이 작업은 되돌릴 수 없습니다.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <DialogFooter>
+                            <DialogClose render={<Button variant="outline" />}>
+                              취소
+                            </DialogClose>
+                            <Button
+                              variant="destructive"
+                              onClick={() => handleDelete(user.id)}
+                              disabled={loadingId === user.id}
+                            >
+                              {loadingId === user.id && (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              )}
+                              삭제
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                    )}
                   </div>
                 </div>
                 {index < disabledUsers.length - 1 && <Separator />}

@@ -39,6 +39,11 @@ const CATEGORY_LABELS: Record<string, string> = {
   bowl: "보울",
 };
 
+function maskName(name: string): string {
+  if (name.length <= 1) return name;
+  return name[0] + "*".repeat(name.length - 1);
+}
+
 export function MenuDetail({ menu }: { menu: Menu }) {
   const router = useRouter();
   const { user } = useUser();
@@ -229,7 +234,7 @@ export function MenuDetail({ menu }: { menu: Menu }) {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">
-                          {review.profile?.nickname ?? "익명"}
+                          {maskName(review.profile?.nickname ?? "익명")}
                         </span>
                         <div className="flex">
                           {[1, 2, 3, 4, 5].map((n) => (
