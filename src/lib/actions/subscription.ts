@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { getKSTDate, formatDateISO } from "@/lib/utils";
 import type {
@@ -39,7 +39,6 @@ export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
   const now = kstNow.toISOString();
   const todayDate = formatDateISO(kstNow);
 
-  // First: check if we're in an apply/pay window (for upcoming subscriptions)
   const { data: applyPeriod } = await supabase
     .from("subscription_periods")
     .select("*")
@@ -51,7 +50,6 @@ export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
 
   if (applyPeriod) return applyPeriod as SubscriptionPeriod;
 
-  // Fallback: find a period whose delivery window includes today
   const { data: deliveryPeriod } = await supabase
     .from("subscription_periods")
     .select("*")
@@ -118,9 +116,7 @@ export async function cancelSubscription(
   subscriptionId: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -149,9 +145,7 @@ export async function getMySubscription(
   periodId: string
 ): Promise<Subscription | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 
@@ -167,9 +161,7 @@ export async function getMySubscription(
 
 export async function getMyLatestSubscription(): Promise<Subscription | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 
@@ -186,9 +178,7 @@ export async function getMyLatestSubscription(): Promise<Subscription | null> {
 
 export async function getMySubscriptions(): Promise<Subscription[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -203,9 +193,7 @@ export async function getMySubscriptions(): Promise<Subscription[]> {
 
 export async function getMyLastPaymentMethod(): Promise<string | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 
@@ -228,9 +216,7 @@ export async function createOrUpdateSubscription(
   totalDeliveryDays?: number
 ): Promise<ActionResult & { subscriptionId?: string }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -306,9 +292,7 @@ export async function updatePaymentAndMarkPaid(
   paymentMethod: PaymentMethod
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -334,9 +318,7 @@ export async function updatePaymentMethod(
   paymentMethod: PaymentMethod
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -361,7 +343,7 @@ export async function adminUpdateSubscriptionPayment(
 ): Promise<ActionResult> {
   const supabase = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return { error: "Unauthorized" };
   const { data: adminProfile } = await supabase
     .from("profiles")

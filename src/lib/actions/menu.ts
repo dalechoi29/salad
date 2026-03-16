@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Menu, DailyMenu, MenuSelection, MenuFavorite } from "@/types";
 
@@ -180,9 +180,7 @@ export async function getMyMenuSelections(
   endDate: string
 ): Promise<MenuSelection[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -204,9 +202,7 @@ export async function updateMenuQuantity(
   replaceForDate = false
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -264,9 +260,7 @@ export async function updateMenuQuantity(
 
 export async function getMyFavorites(): Promise<MenuFavorite[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -281,9 +275,7 @@ export async function getMyFavorites(): Promise<MenuFavorite[]> {
 
 export async function toggleFavorite(menuId: string): Promise<ActionResult & { favorited?: boolean }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 

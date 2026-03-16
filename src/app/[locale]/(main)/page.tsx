@@ -67,6 +67,9 @@ async function HomePageContent() {
   const curMonthStr = `${cy}년 ${cm}월`;
   const nxtMonthStr = `${ny}년 ${nm}월`;
 
+  // Fetch all independent data in a single parallel batch.
+  // getSubscriptionPeriods, getActivePeriod, getHolidays, and getAuthUser are
+  // request-scoped cached, so duplicate calls across actions are free.
   const [
     profile,
     period,
@@ -90,15 +93,14 @@ async function HomePageContent() {
   ]);
 
   const subscription = findCurrentSubscription(allSubscriptions, todayStr);
-
   const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
   const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
 
   const [periodSubscription, deliveryDays, cc, nc] = await Promise.all([
-    period ? getMySubscription(period.id) : Promise.resolve(null),
-    subscription ? getMyDeliveryDays(subscription.id) : Promise.resolve([]),
-    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : Promise.resolve({}),
-    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : Promise.resolve({}),
+    period ? getMySubscription(period.id) : null,
+    subscription ? getMyDeliveryDays(subscription.id) : [],
+    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : {},
+    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : {},
   ]);
 
   let deliveryDayCount = 0;

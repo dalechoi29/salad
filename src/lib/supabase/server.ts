@@ -1,13 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { createClient as createJsClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   return !!url && url.startsWith("http");
 }
 
-export async function createClient() {
+export const createClient = cache(async () => {
   const cookieStore = await cookies();
 
   if (!isSupabaseConfigured()) {
@@ -41,7 +42,18 @@ export async function createClient() {
       },
     }
   );
-}
+});
+
+/**
+ * Request-scoped cached auth user lookup.
+ * Multiple calls within the same server request return the same result
+ * without additional network round-trips to Supabase Auth.
+ */
+export const getAuthUser = cache(async () => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user;
+});
 
 /**
  * Creates a Supabase client with the service role key that bypasses RLS.

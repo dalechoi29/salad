@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Post, Comment, Vote } from "@/types";
 
@@ -51,9 +51,7 @@ export async function createPost(
   category: string = "general"
 ): Promise<ActionResult & { postId?: string }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -87,9 +85,7 @@ export async function updatePost(
   category?: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -115,9 +111,7 @@ export async function updatePost(
 
 export async function deletePost(postId: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -134,9 +128,7 @@ export async function deletePost(postId: string): Promise<ActionResult> {
 
 export async function getMyPosts(): Promise<Post[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -168,9 +160,7 @@ export async function createComment(
   content: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -195,9 +185,7 @@ export async function deleteComment(
   postId: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -217,9 +205,7 @@ export async function deleteComment(
 
 export async function getMyVote(postId: string): Promise<Vote | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 
@@ -238,9 +224,7 @@ export async function vote(
   value: 1 | -1
 ): Promise<ActionResult & { newVoteCount?: number }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 

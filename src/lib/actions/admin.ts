@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types";
 
@@ -9,7 +9,7 @@ const SUPER_ADMIN_ROLES = ["super_admin"];
 
 async function getCallerRole(): Promise<string | null> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return null;
   const { data } = await supabase
     .from("profiles")
@@ -29,7 +29,7 @@ function isSuperAdmin(role: string | null): boolean {
 
 async function hasPermission(permission: string): Promise<boolean> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return false;
 
   const { data: profile } = await supabase
@@ -74,7 +74,7 @@ export async function getUserPermissions(userId: string): Promise<string[]> {
 
 export async function getMyPermissions(): Promise<string[]> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return [];
 
   const { data: profile } = await supabase
@@ -823,22 +823,18 @@ export async function getSubscriptionDayCounts(
 
   if (!subscriptions?.length) return {};
 
-  const { data: disabledProfiles } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("status", "disabled");
+  const subIds = subscriptions.map((s: any) => s.id);
+
+  const [{ data: disabledProfiles }, { data: deliveryDays }] = await Promise.all([
+    supabase.from("profiles").select("id").eq("status", "disabled"),
+    supabase.from("delivery_days").select("week_start, selected_days, user_id").in("subscription_id", subIds),
+  ]);
+
+  if (!deliveryDays?.length) return {};
+
   const disabledUserIds = new Set(
     (disabledProfiles ?? []).map((p: any) => p.id)
   );
-
-  const subIds = subscriptions.map((s: any) => s.id);
-
-  const { data: deliveryDays } = await supabase
-    .from("delivery_days")
-    .select("week_start, selected_days, user_id")
-    .in("subscription_id", subIds);
-
-  if (!deliveryDays?.length) return {};
 
   const dateCounts: Record<string, number> = {};
   for (const dd of deliveryDays) {

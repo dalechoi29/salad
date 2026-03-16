@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 
 export type AuthResult = {
   error?: string;
@@ -137,9 +137,7 @@ export async function logout() {
 
 export async function updateNickname(nickname: string): Promise<AuthResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -166,9 +164,7 @@ export async function changePassword(
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "로그인이 필요합니다" };
 
@@ -190,9 +186,7 @@ export async function changePassword(
 export async function getCurrentProfile() {
   const supabase = await createClient();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 

@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Review } from "@/types";
 
@@ -12,9 +12,7 @@ export async function createReview(
   imageUrl?: string | null
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -43,9 +41,7 @@ export async function updateReview(
   imageUrl?: string | null
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -68,9 +64,7 @@ export async function updateReview(
 
 export async function deleteReview(reviewId: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -101,9 +95,7 @@ export async function getReviewsForMenu(menuId: string): Promise<Review[]> {
 
 export async function getMyReviews(): Promise<Review[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -121,9 +113,7 @@ export async function getMyReviewForPickup(
   pickupDate: string
 ): Promise<Review | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return null;
 

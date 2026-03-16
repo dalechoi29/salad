@@ -1,15 +1,13 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import type { ActionResult, Pickup } from "@/types";
 
 export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -47,9 +45,7 @@ export async function confirmPickup(pickupDate: string): Promise<ActionResult> {
 
 export async function undoPickup(pickupDate: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -73,9 +69,7 @@ export async function getMyPickups(
   endDate: string
 ): Promise<Pickup[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -92,9 +86,7 @@ export async function getMyPickups(
 
 export async function getPickupStreak(): Promise<number> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return 0;
 

@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, CommunityCategory } from "@/types";
 
@@ -19,9 +19,7 @@ export async function createCommunityCategory(
   color: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return { error: "AUTH_REQUIRED" };
 
   const { data: maxOrder } = await supabase
@@ -52,9 +50,7 @@ export async function updateCommunityCategory(
   color: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
@@ -72,9 +68,7 @@ export async function deleteCommunityCategory(
   id: string
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return { error: "AUTH_REQUIRED" };
 
   const { error } = await supabase
@@ -92,9 +86,7 @@ export async function reorderCommunityCategories(
   orderedIds: string[]
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return { error: "AUTH_REQUIRED" };
 
   for (let i = 0; i < orderedIds.length; i++) {

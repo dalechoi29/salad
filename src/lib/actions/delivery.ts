@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 
@@ -8,9 +8,7 @@ export async function getMyDeliveryDays(
   subscriptionId: string
 ): Promise<DeliveryDay[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return [];
 
@@ -30,9 +28,7 @@ export async function saveDeliveryDays(
   selectedDays: number[]
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
@@ -92,9 +88,7 @@ export async function bulkSaveDeliveryDays(
   weeklySelections: { weekStart: string; selectedDays: number[] }[]
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
