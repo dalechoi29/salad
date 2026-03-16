@@ -3,7 +3,7 @@ export interface ActionResult {
   error?: string;
 }
 
-export type UserRole = "user" | "admin";
+export type UserRole = "user" | "admin" | "super_admin";
 
 export type UserStatus = "pending" | "approved" | "disabled";
 
