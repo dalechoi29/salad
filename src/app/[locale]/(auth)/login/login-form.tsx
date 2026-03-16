@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/actions/auth";
+import { getAllowedDomains } from "@/lib/actions/admin";
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import { Loader2, Sprout } from "lucide-react";
@@ -16,12 +17,33 @@ export function LoginForm() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
+  const [domains, setDomains] = useState<string[]>([]);
+  const [showSuggestion, setShowSuggestion] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("salad_pending_email");
     if (saved) setEmail(saved);
+    getAllowedDomains().then((data) => {
+      setDomains(data.map((d: any) => d.domain));
+    });
   }, []);
+
+  function handleEmailChange(value: string) {
+    setEmail(value);
+    if (value.includes("@") && !value.split("@")[1]?.includes(".")) {
+      setShowSuggestion(true);
+    } else {
+      setShowSuggestion(false);
+    }
+  }
+
+  function applySuggestion(domain: string) {
+    const localPart = email.split("@")[0];
+    setEmail(`${localPart}@${domain}`);
+    setShowSuggestion(false);
+    passwordRef.current?.focus();
+  }
 
   async function handleSubmit(formData: FormData) {
     setIsLoading(true);
@@ -79,16 +101,39 @@ export function LoginForm() {
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">{t("email")}</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={t("emailPlaceholder")}
-              required
-              autoComplete="email"
-            />
+            <div className="relative">
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                value={email}
+                onChange={(e) => handleEmailChange(e.target.value)}
+                onBlur={() => setTimeout(() => setShowSuggestion(false), 150)}
+                placeholder={t("emailPlaceholder")}
+                required
+                autoComplete="off"
+              />
+              {showSuggestion && domains.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border bg-popover shadow-md">
+                  {domains
+                    .filter((d) => {
+                      const typed = email.split("@")[1] ?? "";
+                      return d.startsWith(typed);
+                    })
+                    .map((domain) => (
+                      <button
+                        key={domain}
+                        type="button"
+                        className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => applySuggestion(domain)}
+                      >
+                        {email.split("@")[0]}@{domain}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="password">{t("password")}</Label>

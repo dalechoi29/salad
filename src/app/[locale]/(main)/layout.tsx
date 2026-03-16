@@ -1,6 +1,7 @@
 import { Header } from "@/components/layout/header";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
+import { ScrollToTop } from "@/components/layout/scroll-to-top";
 import { UserProvider } from "@/components/providers/user-provider";
 import { getCurrentProfile } from "@/lib/actions/auth";
 
@@ -14,6 +15,7 @@ export default async function MainLayout({
   return (
     <UserProvider user={profile}>
       <div className="relative min-h-screen">
+        <ScrollToTop />
         <DesktopSidebar />
         <div className="md:pl-64">
           <Header />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,8 @@ import { handleActionError } from "@/lib/handle-action-error";
 import { useRouter } from "@/i18n/navigation";
 import { timeAgo } from "@/lib/utils";
 import type { Post, PostCategory, CommunityCategory } from "@/types";
+
+const PAGE_SIZE = 20;
 
 function PostCard({ post, onVoteChange, categoryLabels, categoryColors }: { post: Post; onVoteChange: (id: string, newCount: number) => void; categoryLabels: Record<string, string>; categoryColors: Record<string, string> }) {
   const router = useRouter();
@@ -127,6 +129,9 @@ export function CommunityView({ initialPosts, categories }: CommunityViewProps) 
   const [sort, setSort] = useState<"newest" | "popular">("newest");
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [isLoading, setIsLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(initialPosts.length >= PAGE_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -152,13 +157,47 @@ export function CommunityView({ initialPosts, categories }: CommunityViewProps) 
     try {
       const data = await getPosts(
         newSort,
-        newCategory === "all" ? undefined : newCategory
+        newCategory === "all" ? undefined : newCategory,
+        PAGE_SIZE,
+        0
       );
       setPosts(data);
+      setHasMore(data.length >= PAGE_SIZE);
     } finally {
       setIsLoading(false);
     }
   }
+
+  const loadMore = useCallback(async () => {
+    if (isLoadingMore || !hasMore) return;
+    setIsLoadingMore(true);
+    try {
+      const data = await getPosts(
+        sort,
+        activeCategory === "all" ? undefined : activeCategory,
+        PAGE_SIZE,
+        posts.length
+      );
+      setPosts((prev) => [...prev, ...data]);
+      setHasMore(data.length >= PAGE_SIZE);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, hasMore, sort, activeCategory, posts.length]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) loadMore();
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore]);
 
   async function handleSortChange(newSort: "newest" | "popular") {
     if (newSort === sort) return;
@@ -262,6 +301,12 @@ export function CommunityView({ initialPosts, categories }: CommunityViewProps) 
               setPosts((prev) => prev.map((p) => p.id === id ? { ...p, vote_count: newCount } : p));
             }} />
           ))}
+          {hasMore && <div ref={sentinelRef} className="h-1" />}
+          {isLoadingMore && (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
         </div>
       )}
 
