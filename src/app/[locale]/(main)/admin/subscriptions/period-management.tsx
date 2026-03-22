@@ -27,9 +27,13 @@ import {
   getSubscriptionsByPeriod,
   adminUpdateSubscriptionPayment,
   getSubscriptionSummaryText,
+  adminAddSubscription,
 } from "@/lib/actions/subscription";
+import { getCompanyUsers } from "@/lib/actions/admin";
+import { adminGetDeliveryDates, adminUpdateDeliveryDates } from "@/lib/actions/delivery";
 import { toast } from "sonner";
-import { formatDateISO } from "@/lib/utils";
+import { formatDateISO, cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
 import {
   CalendarRange,
   Plus,
@@ -55,6 +59,7 @@ import type {
 
 interface PeriodManagementProps {
   initialPeriods: SubscriptionPeriod[];
+  holidays: string[];
 }
 
 type DateRange = { from: Date | undefined; to: Date | undefined };
@@ -84,7 +89,50 @@ function formatDisplay(isoStr: string) {
   });
 }
 
-export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
+const SCHEDULE_PRESETS = [
+  { label: "매주 월", freq: 1, weekdays: [1] },
+  { label: "매주 화", freq: 1, weekdays: [2] },
+  { label: "매주 수", freq: 1, weekdays: [3] },
+  { label: "매주 목", freq: 1, weekdays: [4] },
+  { label: "매주 금", freq: 1, weekdays: [5] },
+  { label: "매주 월/수", freq: 2, weekdays: [1, 3] },
+  { label: "매주 화/목", freq: 2, weekdays: [2, 4] },
+  { label: "매주 수/금", freq: 2, weekdays: [3, 5] },
+  { label: "매주 월/목", freq: 2, weekdays: [1, 4] },
+  { label: "매주 월/수/금", freq: 3, weekdays: [1, 3, 5] },
+  { label: "매주 화/목/금", freq: 3, weekdays: [2, 4, 5] },
+  { label: "매주 월/화/목", freq: 3, weekdays: [1, 2, 4] },
+  { label: "매주 월/화/목/금", freq: 4, weekdays: [1, 2, 4, 5] },
+  { label: "매주 월/수/목/금", freq: 4, weekdays: [1, 3, 4, 5] },
+  { label: "매주 월~금", freq: 5, weekdays: [1, 2, 3, 4, 5] },
+];
+
+function generateDatesFromPreset(
+  start: string,
+  end: string,
+  weekdays: number[],
+  holidaySet: Set<string>
+): Date[] {
+  const startDate = new Date(start + "T00:00:00");
+  const endDate = new Date(end + "T00:00:00");
+  const dates: Date[] = [];
+  const cursor = new Date(startDate);
+  while (cursor <= endDate) {
+    const dow = cursor.getDay();
+    if (weekdays.includes(dow)) {
+      const y = cursor.getFullYear();
+      const m = String(cursor.getMonth() + 1).padStart(2, "0");
+      const d = String(cursor.getDate()).padStart(2, "0");
+      if (!holidaySet.has(`${y}-${m}-${d}`)) {
+        dates.push(new Date(cursor));
+      }
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementProps) {
   type SubscriberRow = Subscription & {
     profiles: { nickname: string; email: string; real_name: string };
   };
@@ -102,6 +150,19 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
     useState<PaymentMethod>("credit_card");
   const [summaryTexts, setSummaryTexts] = useState<Record<string, string>>({});
   const [loadingSummary, setLoadingSummary] = useState(false);
+
+  const [addSubDialog, setAddSubDialog] = useState<{ open: boolean; periodId: string }>({ open: false, periodId: "" });
+  const [addSubSearch, setAddSubSearch] = useState("");
+  const [addSubUsers, setAddSubUsers] = useState<{ id: string; realName: string }[]>([]);
+  const [addSubSelectedUser, setAddSubSelectedUser] = useState<{ id: string; realName: string } | null>(null);
+  const [addSubFreq, setAddSubFreq] = useState(5);
+  const [addSubSalads, setAddSubSalads] = useState(1);
+  const [addSubLoading, setAddSubLoading] = useState(false);
+  const [addSubDates, setAddSubDates] = useState<Date[]>([]);
+  const [addSubPreset, setAddSubPreset] = useState<string | null>(null);
+  const [editSubDates, setEditSubDates] = useState<Date[]>([]);
+  const [editSubDatesLoading, setEditSubDatesLoading] = useState(false);
+  const [savingDates, setSavingDates] = useState(false);
 
   const adminPaymentMethods: { value: PaymentMethod; label: string }[] = [
     { value: "credit_card", label: "신용카드" },
@@ -147,6 +208,54 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
     toast.success(
       status === "completed" ? "결제 완료 처리" : "결제 상태 변경"
     );
+  }
+
+  async function openAddSubDialog(periodId: string) {
+    setAddSubDialog({ open: true, periodId });
+    setAddSubSearch("");
+    setAddSubSelectedUser(null);
+    setAddSubFreq(5);
+    setAddSubSalads(1);
+    setAddSubDates([]);
+    setAddSubPreset(null);
+    const users = await getCompanyUsers();
+    setAddSubUsers(users);
+  }
+
+  async function handleAddSubscriber() {
+    if (!addSubSelectedUser) {
+      toast.error("사용자를 선택해주세요");
+      return;
+    }
+    if (addSubDates.length === 0) {
+      toast.error("배달 날짜를 선택해주세요");
+      return;
+    }
+    setAddSubLoading(true);
+    try {
+      const dateStrings = addSubDates
+        .map((d) => formatDateISO(d))
+        .sort();
+      const result = await adminAddSubscription(
+        addSubDialog.periodId,
+        addSubSelectedUser.id,
+        addSubFreq === 0 ? 1 : addSubFreq,
+        addSubSalads,
+        dateStrings
+      );
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(`${addSubSelectedUser.realName}님이 추가되었습니다`);
+      setAddSubDialog({ open: false, periodId: "" });
+      if (expandedPeriodId === addSubDialog.periodId) {
+        const data = await getSubscriptionsByPeriod(addSubDialog.periodId);
+        setSubscribers(data);
+      }
+    } finally {
+      setAddSubLoading(false);
+    }
   }
 
   function openCreateDialog() {
@@ -426,6 +535,15 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
 
                   {isExpanded && (
                     <div className="space-y-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => openAddSubDialog(period.id)}
+                      >
+                        <Plus className="mr-1.5 h-4 w-4" />
+                        구독자 추가
+                      </Button>
                       {loadingSubscribers ? (
                         <div className="flex items-center justify-center py-4">
                           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -483,7 +601,7 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
                                     <Button
                                       variant="ghost"
                                       size="icon-sm"
-                                      onClick={() => {
+                                      onClick={async () => {
                                         if (isEditingThis) {
                                           setEditingSubId(null);
                                         } else {
@@ -492,6 +610,13 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
                                             (sub.payment_method as PaymentMethod) ??
                                               "credit_card"
                                           );
+                                          setEditSubDatesLoading(true);
+                                          try {
+                                            const dates = await adminGetDeliveryDates(sub.id);
+                                            setEditSubDates(dates.map((d) => new Date(d + "T00:00:00")));
+                                          } finally {
+                                            setEditSubDatesLoading(false);
+                                          }
                                         }
                                       }}
                                     >
@@ -522,56 +647,149 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
 
                                 {/* Edit controls */}
                                 {isEditingThis && (
-                                  <div className="space-y-2 pt-1">
-                                    <div className="flex items-center gap-1.5">
-                                      {adminPaymentMethods.map((method) => (
-                                        <button
-                                          key={method.value}
-                                          onClick={() =>
-                                            setEditPaymentMethod(method.value)
-                                          }
-                                          className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                                            editPaymentMethod === method.value
-                                              ? "bg-primary/10 text-primary ring-1 ring-primary/30"
-                                              : "bg-muted text-muted-foreground hover:bg-muted/80"
-                                          }`}
-                                        >
-                                          {method.label}
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <div className="flex gap-2">
-                                      {isPaid && (
+                                  <div className="space-y-3 pt-1">
+                                    <div className="space-y-2">
+                                      <Label className="text-xs">결제 수단</Label>
+                                      <div className="flex items-center gap-1.5">
+                                        {adminPaymentMethods.map((method) => (
+                                          <button
+                                            key={method.value}
+                                            onClick={() =>
+                                              setEditPaymentMethod(method.value)
+                                            }
+                                            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                                              editPaymentMethod === method.value
+                                                ? "bg-primary/10 text-primary ring-1 ring-primary/30"
+                                                : "bg-muted text-muted-foreground hover:bg-muted/80"
+                                            }`}
+                                          >
+                                            {method.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        {isPaid && (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="flex-1 h-8 text-xs text-destructive"
+                                            onClick={async () => {
+                                              await handleAdminPaymentUpdate(
+                                                sub.id,
+                                                editPaymentMethod,
+                                                "pending"
+                                              );
+                                              setEditingSubId(null);
+                                            }}
+                                          >
+                                            결제 취소
+                                          </Button>
+                                        )}
                                         <Button
-                                          variant="outline"
                                           size="sm"
-                                          className="flex-1 h-8 text-xs text-destructive"
+                                          className="flex-1 h-8 text-xs"
                                           onClick={async () => {
                                             await handleAdminPaymentUpdate(
                                               sub.id,
                                               editPaymentMethod,
-                                              "pending"
+                                              "completed"
                                             );
                                             setEditingSubId(null);
                                           }}
                                         >
-                                          결제 취소
+                                          결제 수정
                                         </Button>
-                                      )}
-                                      <Button
-                                        size="sm"
-                                        className="flex-1 h-8 text-xs"
-                                        onClick={async () => {
-                                          await handleAdminPaymentUpdate(
-                                            sub.id,
-                                            editPaymentMethod,
-                                            "completed"
-                                          );
-                                          setEditingSubId(null);
-                                        }}
-                                      >
-                                        수정 완료
-                                      </Button>
+                                      </div>
+                                    </div>
+
+                                    <Separator />
+
+                                    <div className="space-y-2">
+                                      <Label className="text-xs">
+                                        배달 날짜 ({editSubDates.length}일 선택)
+                                      </Label>
+                                      {editSubDatesLoading ? (
+                                        <div className="flex items-center justify-center py-4">
+                                          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                                        </div>
+                                      ) : (() => {
+                                        if (!period.delivery_start || !period.delivery_end) return null;
+                                        const holidaySet = new Set(holidays);
+                                        const start = new Date(period.delivery_start + "T00:00:00");
+                                        const end = new Date(period.delivery_end + "T00:00:00");
+
+                                        const isSameDay = (a: Date, b: Date) =>
+                                          a.getFullYear() === b.getFullYear() &&
+                                          a.getMonth() === b.getMonth() &&
+                                          a.getDate() === b.getDate();
+
+                                        const toggleDate = (date: Date) => {
+                                          const ds = formatDateISO(date);
+                                          const dow = date.getDay();
+                                          if (dow === 0 || dow === 6 || holidaySet.has(ds)) return;
+                                          if (date < start || date > end) return;
+
+                                          setEditSubDates((prev) => {
+                                            const exists = prev.some((d) => isSameDay(d, date));
+                                            if (exists) return prev.filter((d) => !isSameDay(d, date));
+                                            return [...prev, date].sort((a, b) => a.getTime() - b.getTime());
+                                          });
+                                        };
+
+                                        return (
+                                          <>
+                                            <Calendar
+                                              mode="default"
+                                              defaultMonth={start}
+                                              disabled={[
+                                                { before: start },
+                                                { after: end },
+                                                { dayOfWeek: [0, 6] },
+                                              ]}
+                                              modifiers={{
+                                                selected: editSubDates,
+                                                holiday: holidays.map((h) => new Date(h + "T00:00:00")),
+                                              }}
+                                              modifiersClassNames={{
+                                                selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
+                                                holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
+                                              }}
+                                              classNames={{ root: "w-full" }}
+                                              onDayClick={(day) => toggleDate(day)}
+                                              className="rounded-md border"
+                                            />
+                                            <Button
+                                              size="sm"
+                                              className="w-full h-8 text-xs"
+                                              disabled={savingDates}
+                                              onClick={async () => {
+                                                setSavingDates(true);
+                                                try {
+                                                  const dateStrings = editSubDates.map((d) => formatDateISO(d)).sort();
+                                                  const result = await adminUpdateDeliveryDates(sub.id, sub.user_id, dateStrings);
+                                                  if (result.error) {
+                                                    toast.error(result.error);
+                                                    return;
+                                                  }
+                                                  setSubscribers((prev) =>
+                                                    prev.map((s) =>
+                                                      s.id === sub.id
+                                                        ? { ...s, total_delivery_days: dateStrings.length || null }
+                                                        : s
+                                                    )
+                                                  );
+                                                  toast.success("배달 날짜가 저장되었습니다");
+                                                } finally {
+                                                  setSavingDates(false);
+                                                }
+                                              }}
+                                            >
+                                              {savingDates && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                                              날짜 저장 ({editSubDates.length}일)
+                                            </Button>
+                                          </>
+                                        );
+                                      })()}
                                     </div>
                                   </div>
                                 )}
@@ -722,6 +940,238 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               {editingId ? "수정" : "생성"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addSubDialog.open} onOpenChange={(open) => setAddSubDialog((v) => ({ ...v, open }))}>
+        <DialogContent className="max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>구독자 추가</DialogTitle>
+            <DialogDescription>
+              사용자를 검색하고 구독 정보를 입력하세요.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 space-y-4 overflow-y-auto pr-1">
+            <div className="space-y-2">
+              <Label>사용자</Label>
+              {addSubSelectedUser ? (
+                <div className="flex items-center justify-between rounded-lg border p-2.5">
+                  <span className="text-sm font-medium">{addSubSelectedUser.realName}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setAddSubSelectedUser(null)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Input
+                    placeholder="이름으로 검색..."
+                    value={addSubSearch}
+                    onChange={(e) => setAddSubSearch(e.target.value)}
+                  />
+                  {addSubSearch.length > 0 && (
+                    <div className="max-h-40 overflow-y-auto rounded-md border">
+                      {addSubUsers
+                        .filter((u) => u.realName.includes(addSubSearch))
+                        .map((u) => (
+                          <button
+                            key={u.id}
+                            className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors"
+                            onClick={() => {
+                              setAddSubSelectedUser(u);
+                              setAddSubSearch("");
+                            }}
+                          >
+                            {u.realName}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>주 횟수</Label>
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => {
+                      setAddSubFreq(n);
+                      setAddSubPreset(null);
+                      setAddSubDates([]);
+                    }}
+                    className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
+                      addSubFreq === n
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {n}회
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    setAddSubFreq(0);
+                    setAddSubPreset(null);
+                    setAddSubDates([]);
+                  }}
+                  className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
+                    addSubFreq === 0
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  }`}
+                >
+                  자유
+                </button>
+              </div>
+
+              {(() => {
+                const filteredPresets = SCHEDULE_PRESETS.filter((pr) => pr.freq === addSubFreq);
+                if (filteredPresets.length === 0) return null;
+                const p = periods.find((pp) => pp.id === addSubDialog.periodId);
+                if (!p?.delivery_start || !p?.delivery_end) return null;
+                const holidaySet = new Set(holidays);
+
+                const applyPreset = (preset: typeof SCHEDULE_PRESETS[0]) => {
+                  if (addSubPreset === preset.label) {
+                    setAddSubPreset(null);
+                    setAddSubDates([]);
+                    return;
+                  }
+                  setAddSubPreset(preset.label);
+                  const dates = generateDatesFromPreset(
+                    p.delivery_start!,
+                    p.delivery_end!,
+                    preset.weekdays,
+                    holidaySet
+                  );
+                  setAddSubDates(dates);
+                };
+
+                return (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {filteredPresets.map((preset) => (
+                      <button
+                        key={preset.label}
+                        onClick={() => applyPreset(preset)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                          addSubPreset === preset.label
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border text-muted-foreground hover:bg-primary/5 hover:border-primary/30"
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {addSubFreq === 0 && (
+                <p className="text-xs text-muted-foreground pt-1">
+                  달력에서 원하는 날짜를 자유롭게 선택해주세요
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>샐러드 개수 (1회당)</Label>
+              <div className="flex gap-1">
+                {[1, 2, 3].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setAddSubSalads(n)}
+                    className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
+                      addSubSalads === n
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {n}개
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {(() => {
+              const p = periods.find((pp) => pp.id === addSubDialog.periodId);
+              if (!p?.delivery_start || !p?.delivery_end) return null;
+              const holidaySet = new Set(holidays);
+              const start = new Date(p.delivery_start + "T00:00:00");
+              const end = new Date(p.delivery_end + "T00:00:00");
+
+              const isSameDay = (a: Date, b: Date) =>
+                a.getFullYear() === b.getFullYear() &&
+                a.getMonth() === b.getMonth() &&
+                a.getDate() === b.getDate();
+
+              const toggleDate = (date: Date) => {
+                const ds = formatDateISO(date);
+                const dow = date.getDay();
+                if (dow === 0 || dow === 6 || holidaySet.has(ds)) return;
+                if (date < start || date > end) return;
+
+                setAddSubPreset(null);
+                setAddSubDates((prev) => {
+                  const exists = prev.some((d) => isSameDay(d, date));
+                  if (exists) return prev.filter((d) => !isSameDay(d, date));
+                  return [...prev, date].sort((a, b) => a.getTime() - b.getTime());
+                });
+              };
+
+              return (
+                <div className="space-y-2">
+                  <Label>배달 날짜 ({addSubDates.length}일 선택)</Label>
+                  <Calendar
+                    mode="default"
+                    defaultMonth={start}
+                    disabled={[
+                      { before: start },
+                      { after: end },
+                      { dayOfWeek: [0, 6] },
+                    ]}
+                    modifiers={{
+                      selected: addSubDates,
+                      holiday: holidays.map((h) => new Date(h + "T00:00:00")),
+                    }}
+                    modifiersClassNames={{
+                      selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
+                      holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
+                    }}
+                    classNames={{ root: "w-full" }}
+                    onDayClick={(day) => toggleDate(day)}
+                    className="rounded-md border"
+                  />
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block size-3 rounded-full bg-blue-100 dark:bg-blue-900/30" />
+                      선택한 날짜
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block size-3 rounded-full bg-red-100 dark:bg-red-900/30" />
+                      공휴일
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              취소
+            </DialogClose>
+            <Button onClick={handleAddSubscriber} disabled={addSubLoading || !addSubSelectedUser || addSubDates.length === 0}>
+              {addSubLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              추가 ({addSubDates.length}일)
             </Button>
           </DialogFooter>
         </DialogContent>

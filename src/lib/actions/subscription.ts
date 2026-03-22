@@ -369,6 +369,77 @@ export async function adminUpdateSubscriptionPayment(
   return { success: true };
 }
 
+export async function adminAddSubscription(
+  periodId: string,
+  userId: string,
+  frequencyPerWeek: number,
+  saladsPerDelivery: number,
+  deliveryDates?: string[]
+): Promise<ActionResult> {
+  const supabase = await createClient();
+
+  const user = await getAuthUser();
+  if (!user) return { error: "Unauthorized" };
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (!adminProfile?.role || !["admin", "super_admin"].includes(adminProfile.role)) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const { data: existing } = await supabase
+    .from("subscriptions")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("period_id", periodId)
+    .single();
+
+  if (existing) return { error: "이미 구독 중인 사용자입니다" };
+
+  const { data: inserted, error } = await supabase.from("subscriptions").insert({
+    user_id: userId,
+    period_id: periodId,
+    frequency_per_week: frequencyPerWeek,
+    salads_per_delivery: saladsPerDelivery,
+    total_delivery_days: deliveryDates?.length ?? null,
+    payment_method: null,
+    payment_status: "pending",
+  }).select("id").single();
+
+  if (error) return { error: error.message };
+
+  if (deliveryDates && deliveryDates.length > 0 && inserted) {
+    const weekMap = new Map<string, number[]>();
+    for (const ds of deliveryDates) {
+      const d = new Date(ds + "T00:00:00");
+      const dow = d.getDay();
+      const monday = new Date(d);
+      const diff = dow === 0 ? 6 : dow - 1;
+      monday.setDate(monday.getDate() - diff);
+      const wk = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+      const days = weekMap.get(wk) ?? [];
+      if (!days.includes(dow)) days.push(dow);
+      weekMap.set(wk, days);
+    }
+
+    const rows = [...weekMap.entries()].map(([weekStart, days]) => ({
+      user_id: userId,
+      subscription_id: inserted.id,
+      week_start: weekStart,
+      selected_days: days.sort((a, b) => a - b),
+    }));
+
+    const { error: ddError } = await supabase.from("delivery_days").insert(rows);
+    if (ddError) return { error: ddError.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { success: true };
+}
+
 // ─── Admin Queries ───────────────────────────────────────────
 
 export async function getSubscriptionsByPeriod(

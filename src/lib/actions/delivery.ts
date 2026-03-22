@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 
@@ -47,6 +47,104 @@ export async function getMyDeliveryDateStrings(): Promise<string[]> {
     }
   }
   return dates.sort();
+}
+
+export async function adminGetDeliveryDates(
+  subscriptionId: string
+): Promise<string[]> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return [];
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (!profile?.role || !["admin", "super_admin"].includes(profile.role)) return [];
+
+  const { data } = await supabase
+    .from("delivery_days")
+    .select("week_start, selected_days")
+    .eq("subscription_id", subscriptionId)
+    .order("week_start");
+
+  if (!data?.length) return [];
+
+  const dates: string[] = [];
+  for (const dd of data) {
+    for (const dayOfWeek of dd.selected_days ?? []) {
+      const ws = new Date(dd.week_start + "T00:00:00");
+      ws.setDate(ws.getDate() + (dayOfWeek - 1));
+      const y = ws.getFullYear();
+      const m = String(ws.getMonth() + 1).padStart(2, "0");
+      const d = String(ws.getDate()).padStart(2, "0");
+      dates.push(`${y}-${m}-${d}`);
+    }
+  }
+  return dates.sort();
+}
+
+export async function adminUpdateDeliveryDates(
+  subscriptionId: string,
+  userId: string,
+  deliveryDates: string[]
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return { error: "Unauthorized" };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (!profile?.role || !["admin", "super_admin"].includes(profile.role)) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const admin = createAdminClient();
+
+  const { error: delError } = await admin
+    .from("delivery_days")
+    .delete()
+    .eq("subscription_id", subscriptionId)
+    .eq("user_id", userId);
+  if (delError) return { error: delError.message };
+
+  if (deliveryDates.length > 0) {
+    const weekMap = new Map<string, number[]>();
+    for (const ds of deliveryDates) {
+      const d = new Date(ds + "T00:00:00");
+      const dow = d.getDay();
+      const monday = new Date(d);
+      const diff = dow === 0 ? 6 : dow - 1;
+      monday.setDate(monday.getDate() - diff);
+      const wk = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+      const days = weekMap.get(wk) ?? [];
+      if (!days.includes(dow)) days.push(dow);
+      weekMap.set(wk, days);
+    }
+
+    const rows = [...weekMap.entries()].map(([weekStart, days]) => ({
+      user_id: userId,
+      subscription_id: subscriptionId,
+      week_start: weekStart,
+      selected_days: days.sort((a, b) => a - b),
+    }));
+
+    const { error: insError } = await admin.from("delivery_days").insert(rows);
+    if (insError) return { error: insError.message };
+  }
+
+  const { error: updError } = await admin
+    .from("subscriptions")
+    .update({ total_delivery_days: deliveryDates.length || null })
+    .eq("id", subscriptionId);
+  if (updError) return { error: updError.message };
+
+  revalidatePath("/", "layout");
+  return { success: true };
 }
 
 export async function saveDeliveryDays(
