@@ -422,7 +422,15 @@ export function MenuSelectionView({
                     <span className="text-sm">배정된 메뉴가 없습니다</span>
                   </div>
                 ) : (
-                  menusForDay.map((dm, idx) => {
+                  [...menusForDay]
+                    .sort((a, b) => {
+                      const order: Record<string, number> = { main: 0, optional: 1 };
+                      const catOrder: Record<string, number> = { salad: 0, sandwich: 1, bowl: 2 };
+                      const slotDiff = (order[a.slot_type] ?? 1) - (order[b.slot_type] ?? 1);
+                      if (slotDiff !== 0) return slotDiff;
+                      return (catOrder[a.menu?.category ?? ""] ?? 99) - (catOrder[b.menu?.category ?? ""] ?? 99);
+                    })
+                    .map((dm, idx) => {
                     const qty = getQuantityForMenu(dateStr, dm.id);
                     const menu = dm.menu;
                     if (!menu) return null;
