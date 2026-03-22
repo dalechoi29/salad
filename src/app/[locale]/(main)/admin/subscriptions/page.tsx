@@ -11,7 +11,7 @@ export default async function AdminSubscriptionsPage() {
   return (
     <PeriodManagement
       initialPeriods={periods}
-      holidays={holidays.map((h) => h.date)}
+      holidays={holidays.map((h) => h.holiday_date)}
     />
   );
 }
