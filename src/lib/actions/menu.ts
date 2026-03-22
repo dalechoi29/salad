@@ -135,6 +135,27 @@ export async function getDailyMenusByDate(
   return (data as DailyMenu[]) ?? [];
 }
 
+export async function getDailyMenusByDates(
+  dates: string[]
+): Promise<Record<string, DailyMenu[]>> {
+  if (dates.length === 0) return {};
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from("daily_menu_assignments")
+    .select("*, menu:menus(*)")
+    .in("delivery_date", dates)
+    .order("slot_type");
+
+  const result: Record<string, DailyMenu[]> = {};
+  for (const d of dates) result[d] = [];
+  for (const row of (data as DailyMenu[]) ?? []) {
+    const date = (row as any).delivery_date;
+    if (date) (result[date] ??= []).push(row);
+  }
+  return result;
+}
+
 export async function assignMenuToDate(
   deliveryDate: string,
   menuId: string,

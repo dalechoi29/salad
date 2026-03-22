@@ -43,7 +43,7 @@ interface PickupViewProps {
   selections: MenuSelection[];
   deliveryStart: string;
   deliveryEnd: string;
-  todayMenus: DailyMenu[];
+  unselectedMenusMap: Record<string, DailyMenu[]>;
   todayStr: string;
 }
 
@@ -52,7 +52,7 @@ export function PickupView({
   selections,
   deliveryStart,
   deliveryEnd,
-  todayMenus,
+  unselectedMenusMap,
   todayStr: serverTodayStr,
 }: PickupViewProps) {
   const [pickups, setPickups] = useState(initialPickups);
@@ -119,36 +119,38 @@ export function PickupView({
       });
     }
 
-    if (todayMenus.length > 0 && !dateSet.has(serverTodayStr)) {
-      const todayPickup = pickups.find(
-        (p) => p.pickup_date === serverTodayStr && p.confirmed && p.menu_id
+    for (const [dateStr, menus] of Object.entries(unselectedMenusMap)) {
+      if (dateSet.has(dateStr) || menus.length === 0) continue;
+
+      const confirmedPickup = pickups.find(
+        (p) => p.pickup_date === dateStr && p.confirmed && p.menu_id
       );
-      if (todayPickup?.menu_id) {
-        const matchedMenu = todayMenus.find(
-          (dm) => dm.menu?.id === todayPickup.menu_id
+      if (confirmedPickup?.menu_id) {
+        const matchedMenu = menus.find(
+          (dm) => dm.menu?.id === confirmedPickup.menu_id
         );
         items.push({
-          date: serverTodayStr,
-          menuId: todayPickup.menu_id,
+          date: dateStr,
+          menuId: confirmedPickup.menu_id,
           menuTitle: matchedMenu?.menu?.title ?? "메뉴",
           menuImage: matchedMenu?.menu?.image_url ?? null,
           sauce: matchedMenu?.menu?.sauce ?? "",
         });
       } else {
         items.push({
-          date: serverTodayStr,
+          date: dateStr,
           menuId: "",
           menuTitle: "메뉴를 선택해주세요",
           menuImage: null,
           sauce: "",
           unselected: true,
-          availableMenus: todayMenus,
+          availableMenus: menus,
         });
       }
     }
 
     return items.sort((a, b) => a.date.localeCompare(b.date));
-  }, [selections, todayMenus, serverTodayStr, pickups]);
+  }, [selections, unselectedMenusMap, pickups]);
 
   const availableMonths = useMemo(() => {
     const monthSet = new Set<string>();

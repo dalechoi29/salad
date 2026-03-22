@@ -10,7 +10,10 @@ import {
   Download,
   Loader2,
   FileSpreadsheet,
+  Copy,
+  MessageSquareText,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import { getVendorReport, type VendorReportRow } from "@/lib/actions/admin";
 import { getMonthRange, formatMonthLabel } from "@/lib/utils";
@@ -91,6 +94,20 @@ export function VendorReportView() {
     URL.revokeObjectURL(url);
   }
 
+  const [showSummary, setShowSummary] = useState(false);
+
+  function generateDailySummary(row: VendorReportRow): string {
+    const dateObj = new Date(row.date + "T00:00:00");
+    const m = dateObj.getMonth() + 1;
+    const d = dateObj.getDate();
+    const menuParts = row.menuBreakdown.map((mb) => `${mb.menuTitle} ${mb.count}개`).join(", ");
+    return `${m}월 ${d}일은 ${menuParts} 배송 부탁드려요:)`;
+  }
+
+  function generateFullSummary(): string {
+    return rows.map(generateDailySummary).join("\n");
+  }
+
   const grandTotal = rows.reduce((s, r) => s + r.totalSalads, 0);
 
   return (
@@ -164,6 +181,40 @@ export function VendorReportView() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Summary message */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            onClick={() => setShowSummary((v) => !v)}
+          >
+            <MessageSquareText className="mr-1.5 h-4 w-4" />
+            {showSummary ? "요약 메시지 숨기기" : "요약 메시지 보기"}
+          </Button>
+
+          {showSummary && (
+            <div className="relative rounded-lg bg-muted/70 p-4">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 top-2 h-7 w-7"
+                onClick={() => {
+                  navigator.clipboard.writeText(generateFullSummary());
+                  toast.success("클립보드에 복사되었습니다");
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+              <div className="space-y-1.5 pr-8">
+                {rows.map((row) => (
+                  <p key={row.date} className="text-sm leading-relaxed">
+                    {generateDailySummary(row)}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Detail table */}
           <Card>

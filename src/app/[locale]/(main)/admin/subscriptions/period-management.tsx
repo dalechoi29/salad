@@ -26,6 +26,7 @@ import {
   deleteSubscriptionPeriod,
   getSubscriptionsByPeriod,
   adminUpdateSubscriptionPayment,
+  getSubscriptionSummaryText,
 } from "@/lib/actions/subscription";
 import { toast } from "sonner";
 import { formatDateISO } from "@/lib/utils";
@@ -41,6 +42,8 @@ import {
   CheckCircle2,
   Clock,
   ArrowLeft,
+  Copy,
+  MessageSquareText,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { DateRangePicker } from "@/components/shared/date-range-picker";
@@ -97,6 +100,8 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
   const [editingSubId, setEditingSubId] = useState<string | null>(null);
   const [editPaymentMethod, setEditPaymentMethod] =
     useState<PaymentMethod>("credit_card");
+  const [summaryTexts, setSummaryTexts] = useState<Record<string, string>>({});
+  const [loadingSummary, setLoadingSummary] = useState(false);
 
   const adminPaymentMethods: { value: PaymentMethod; label: string }[] = [
     { value: "credit_card", label: "신용카드" },
@@ -441,9 +446,8 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
                                   )?.label ?? sub.payment_method
                                 : "미선택";
                             const totalSalads =
-                              sub.frequency_per_week *
-                              sub.salads_per_delivery *
-                              4;
+                              (sub.total_delivery_days ?? sub.frequency_per_week * 4) *
+                              sub.salads_per_delivery;
                             const totalPrice =
                               period.price_per_salad > 0
                                 ? totalSalads * period.price_per_salad
@@ -574,6 +578,52 @@ export function PeriodManagement({ initialPeriods }: PeriodManagementProps) {
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {subscribers.length > 0 && (
+                        <div className="pt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                            disabled={loadingSummary}
+                            onClick={async () => {
+                              setLoadingSummary(true);
+                              try {
+                                const text = await getSubscriptionSummaryText(period.id);
+                                setSummaryTexts((prev) => ({ ...prev, [period.id]: text }));
+                              } finally {
+                                setLoadingSummary(false);
+                              }
+                            }}
+                          >
+                            {loadingSummary ? (
+                              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                            ) : (
+                              <MessageSquareText className="mr-1.5 h-4 w-4" />
+                            )}
+                            요약 메시지 생성
+                          </Button>
+
+                          {summaryTexts[period.id] && (
+                            <div className="mt-3 relative rounded-lg bg-muted/70 p-4">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="absolute right-2 top-2"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(summaryTexts[period.id]);
+                                  toast.success("클립보드에 복사되었습니다");
+                                }}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                              <pre className="whitespace-pre-wrap text-sm leading-relaxed pr-8">
+                                {summaryTexts[period.id]}
+                              </pre>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

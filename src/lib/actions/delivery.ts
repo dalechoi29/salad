@@ -22,6 +22,33 @@ export async function getMyDeliveryDays(
   return (data as DeliveryDay[]) ?? [];
 }
 
+export async function getMyDeliveryDateStrings(): Promise<string[]> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return [];
+
+  const { data } = await supabase
+    .from("delivery_days")
+    .select("week_start, selected_days")
+    .eq("user_id", user.id)
+    .order("week_start");
+
+  if (!data?.length) return [];
+
+  const dates: string[] = [];
+  for (const dd of data) {
+    for (const dayOfWeek of dd.selected_days ?? []) {
+      const ws = new Date(dd.week_start + "T00:00:00");
+      ws.setDate(ws.getDate() + (dayOfWeek - 1));
+      const y = ws.getFullYear();
+      const m = String(ws.getMonth() + 1).padStart(2, "0");
+      const d = String(ws.getDate()).padStart(2, "0");
+      dates.push(`${y}-${m}-${d}`);
+    }
+  }
+  return dates.sort();
+}
+
 export async function saveDeliveryDays(
   subscriptionId: string,
   weekStart: string,
@@ -34,14 +61,17 @@ export async function saveDeliveryDays(
 
   const { data: subscription } = await supabase
     .from("subscriptions")
-    .select("frequency_per_week")
+    .select("frequency_per_week, total_delivery_days")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .single();
 
   if (!subscription) return { error: "Subscription not found" };
 
-  if (selectedDays.length > subscription.frequency_per_week) {
+  if (
+    !subscription.total_delivery_days &&
+    selectedDays.length > subscription.frequency_per_week
+  ) {
     return {
       error: `최대 ${subscription.frequency_per_week}일까지 선택할 수 있습니다`,
     };
@@ -94,7 +124,7 @@ export async function bulkSaveDeliveryDays(
 
   const { data: subscription } = await supabase
     .from("subscriptions")
-    .select("frequency_per_week")
+    .select("frequency_per_week, total_delivery_days")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .single();
@@ -105,7 +135,10 @@ export async function bulkSaveDeliveryDays(
     if (selectedDays.some((d) => d < 1 || d > 5)) {
       return { error: "월~금만 선택 가능합니다" };
     }
-    if (selectedDays.length > subscription.frequency_per_week) {
+    if (
+      !subscription.total_delivery_days &&
+      selectedDays.length > subscription.frequency_per_week
+    ) {
       return {
         error: `최대 ${subscription.frequency_per_week}일까지 선택할 수 있습니다`,
       };

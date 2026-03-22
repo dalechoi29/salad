@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Card,
   CardContent,
@@ -36,6 +36,7 @@ interface Props {
   showBackButton?: boolean;
   showTitle?: boolean;
   isLoggedIn?: boolean;
+  defaultMonth?: string;
 }
 
 const DAY_LABELS = ["월", "화", "수", "목", "금"];
@@ -352,6 +353,7 @@ export function SubscriptionStatusView({
   showBackButton = true,
   showTitle = false,
   isLoggedIn = true,
+  defaultMonth,
 }: Props) {
   const tabs = useMemo(() => {
     const t: { label: string; period: SubscriptionPeriod | null; counts: Record<string, number> }[] = [];
@@ -365,6 +367,22 @@ export function SubscriptionStatusView({
   }, [currentPeriod, nextPeriod, currentCounts, nextCounts]);
 
   const [activeTab, setActiveTab] = useState(0);
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#subscription-status")) return;
+
+    const monthParam = hash.split("month=")[1];
+    if (monthParam && tabs.length > 1) {
+      const decoded = decodeURIComponent(monthParam);
+      const idx = tabs.findIndex((t) => t.label.includes(decoded));
+      if (idx >= 0) setActiveTab(idx);
+    }
+
+    setTimeout(() => {
+      document.getElementById("subscription-status")?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+  }, []);
   const active = tabs[activeTab];
 
   const monthToggle = tabs.length > 1 && (

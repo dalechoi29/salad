@@ -22,6 +22,7 @@ import {
   updatePaymentAndMarkPaid,
   updatePaymentMethod,
   cancelSubscription,
+  getSoloDeliveryDates,
 } from "@/lib/actions/subscription";
 import { bulkSaveDeliveryDays } from "@/lib/actions/delivery";
 import { handleActionError } from "@/lib/handle-action-error";
@@ -386,6 +387,7 @@ export function SubscriptionView({
   const router = useRouter();
 
   const [showSuccess, setShowSuccess] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
 
   if (!period) {
     return (
@@ -412,7 +414,7 @@ export function SubscriptionView({
     return <SuccessScreen period={period} onContinue={() => router.push("/")} />;
   }
 
-  if (existingSubscription) {
+  if (existingSubscription && !cancelled) {
     return (
       <SubscriptionStatus
         period={period}
@@ -420,6 +422,7 @@ export function SubscriptionView({
         holidays={holidays}
         savedDeliveryDates={savedDeliveryDates}
         lastPaymentMethod={lastPaymentMethod}
+        onCancelled={() => setCancelled(true)}
       />
     );
   }
@@ -520,14 +523,18 @@ function SubscriptionForm({
           return prev.filter((d) => !isSameDay(d, date));
         }
 
-        const weekKey = getWeekMonday(date);
-        const sameWeek = prev
-          .filter((d) => getWeekMonday(d) === weekKey)
-          .sort((a, b) => a.getTime() - b.getTime());
-
         let next = [...prev];
-        if (frequency !== null && sameWeek.length >= frequency) {
-          next = next.filter((d) => !isSameDay(d, sameWeek[0]));
+
+        // Skip weekly cap enforcement for custom date selection (frequency === 0)
+        if (frequency !== null && frequency > 0) {
+          const weekKey = getWeekMonday(date);
+          const sameWeek = prev
+            .filter((d) => getWeekMonday(d) === weekKey)
+            .sort((a, b) => a.getTime() - b.getTime());
+
+          if (sameWeek.length >= frequency) {
+            next = next.filter((d) => !isSameDay(d, sameWeek[0]));
+          }
         }
 
         next.push(date);
@@ -542,18 +549,25 @@ function SubscriptionForm({
   const deliveryDayCount =
     selectedDates.length > 0
       ? selectedDates.length
-      : getMinDeliveryDaysForFrequency(frequency ?? 0, period.delivery_start, period.delivery_end, holidaySetForCount);
+      : frequency === 0
+        ? 0
+        : getMinDeliveryDaysForFrequency(frequency ?? 0, period.delivery_start, period.delivery_end, holidaySetForCount);
   const totalSalads = deliveryDayCount * salads;
   const totalPrice =
     period.price_per_salad > 0 ? totalSalads * period.price_per_salad : null;
 
   async function handleSubmit() {
     if (frequency === null) return;
+    if (frequency === 0 && selectedDates.length === 0) {
+      toast.error("날짜를 1개 이상 선택해주세요");
+      return;
+    }
     setIsLoading(true);
     try {
+      const effectiveFrequency = frequency === 0 ? 1 : frequency;
       const result = await createOrUpdateSubscription(
         period.id,
-        frequency,
+        effectiveFrequency,
         salads,
         selectedDates.length > 0 ? selectedDates.length : undefined
       );
@@ -625,9 +639,26 @@ function SubscriptionForm({
                   주 {n}회
                 </button>
               ))}
+              <button
+                onClick={() => {
+                  if (!canEdit) return;
+                  setFrequency(0);
+                  setSelectedPreset(null);
+                  setShowCalendar(true);
+                  setSelectedDates([]);
+                }}
+                disabled={!canEdit}
+                className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
+                  frequency === 0
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                } ${!canEdit ? "opacity-50" : ""}`}
+              >
+                자유
+              </button>
             </div>
 
-            {frequency !== null && (
+            {frequency !== null && frequency > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {SCHEDULE_PRESETS.filter((p) => p.freq === frequency).map(
                   (preset) => (
@@ -651,6 +682,12 @@ function SubscriptionForm({
                   )
                 )}
               </div>
+            )}
+
+            {frequency === 0 && (
+              <p className="text-xs text-muted-foreground">
+                달력에서 원하는 날짜를 자유롭게 선택해주세요
+              </p>
             )}
 
             {frequency !== null && showCalendar && period.delivery_start && (
@@ -741,16 +778,19 @@ function SubscriptionStatus({
   holidays,
   savedDeliveryDates: initialSavedDates = [],
   lastPaymentMethod,
+  onCancelled,
 }: {
   period: SubscriptionPeriod;
   subscription: Subscription;
   holidays: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
+  onCancelled?: () => void;
 }) {
   const t = useTranslations("subscription");
   const router = useRouter();
   const initialPhase = getPeriodPhase(period);
+  const isInPaymentWindow = new Date() >= new Date(period.pay_start) && new Date() <= new Date(period.pay_end);
   const [isLoading, setIsLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [frequency, setFrequency] = useState(subscription.frequency_per_week);
@@ -818,6 +858,20 @@ function SubscriptionStatus({
     holidaySet
   );
 
+  const isCustomDates = (() => {
+    if (savedDates.length === 0 || matchedPresetLabel) return false;
+    const weekGroups = new Map<string, Set<number>>();
+    for (const d of savedDates) {
+      const wk = getWeekMonday(d);
+      const set = weekGroups.get(wk) ?? new Set<number>();
+      set.add(d.getDay());
+      weekGroups.set(wk, set);
+    }
+    if (weekGroups.size <= 1) return false;
+    const patterns = Array.from(weekGroups.values()).map((s) => [...s].sort().join(","));
+    return new Set(patterns).size > 1;
+  })();
+
   const initialSavedDateObjects = initialSavedDates.map((s) => new Date(s + "T00:00:00"));
   const [editSelectedDates, setEditSelectedDates] = useState<Date[]>([]);
   const [editShowCalendar, setEditShowCalendar] = useState(false);
@@ -843,11 +897,11 @@ function SubscriptionStatus({
   }, [selectedPreset, period.delivery_start, period.delivery_end]);
 
   function handleStartEditing() {
-    setFrequency(currentFrequency);
+    setFrequency(isCustomDates ? 0 : currentFrequency);
     setSalads(currentSalads);
     setSelectedPreset(matchedPresetLabel);
     setEditSelectedDates([...savedDates]);
-    setEditShowCalendar(savedDates.length > 0);
+    setEditShowCalendar(savedDates.length > 0 || isCustomDates);
     setIsEditing(true);
   }
 
@@ -859,14 +913,17 @@ function SubscriptionStatus({
           return prev.filter((d) => !isSameDay(d, date));
         }
 
-        const weekKey = getWeekMonday(date);
-        const sameWeek = prev
-          .filter((d) => getWeekMonday(d) === weekKey)
-          .sort((a, b) => a.getTime() - b.getTime());
-
         let next = [...prev];
-        if (sameWeek.length >= frequency) {
-          next = next.filter((d) => !isSameDay(d, sameWeek[0]));
+
+        if (frequency > 0) {
+          const weekKey = getWeekMonday(date);
+          const sameWeek = prev
+            .filter((d) => getWeekMonday(d) === weekKey)
+            .sort((a, b) => a.getTime() - b.getTime());
+
+          if (sameWeek.length >= frequency) {
+            next = next.filter((d) => !isSameDay(d, sameWeek[0]));
+          }
         }
 
         next.push(date);
@@ -880,7 +937,9 @@ function SubscriptionStatus({
   const editDeliveryDays =
     editSelectedDates.length > 0
       ? editSelectedDates.length
-      : getMinDeliveryDaysForFrequency(frequency, period.delivery_start, period.delivery_end, holidaySet);
+      : frequency === 0
+        ? 0
+        : getMinDeliveryDaysForFrequency(frequency, period.delivery_start, period.delivery_end, holidaySet);
   const editTotalSalads = editDeliveryDays * salads;
   const editTotalPrice =
     period.price_per_salad > 0
@@ -890,12 +949,24 @@ function SubscriptionStatus({
   const isPaid = paymentStatus === "completed";
   const canEdit = phase === "applying" || phase === "paying";
 
+  const [soloDates, setSoloDates] = useState<{ date: string; weekday: string }[]>([]);
+  useEffect(() => {
+    if (phase === "paying" || isInPaymentWindow) {
+      getSoloDeliveryDates(period.id).then(setSoloDates);
+    }
+  }, [period.id, phase, isInPaymentWindow]);
+
   async function handleSavePlan() {
+    if (frequency === 0 && editSelectedDates.length === 0) {
+      toast.error("날짜를 1개 이상 선택해주세요");
+      return;
+    }
     setIsLoading(true);
     try {
+      const effectiveFrequency = frequency === 0 ? 1 : frequency;
       const result = await createOrUpdateSubscription(
         period.id,
-        frequency,
+        effectiveFrequency,
         salads,
         editSelectedDates.length > 0 ? editSelectedDates.length : undefined
       );
@@ -922,6 +993,9 @@ function SubscriptionStatus({
       setCurrentSalads(salads);
       setSavedDates([...editSelectedDates]);
       setIsEditing(false);
+
+      getSoloDeliveryDates(period.id).then(setSoloDates);
+
       if (planChanged && isPaid) {
         setPaymentStatus("pending");
         setSelectedPayment("credit_card");
@@ -988,8 +1062,7 @@ function SubscriptionStatus({
       }
       toast.success("구독 신청이 취소되었습니다");
       setShowCancelDialog(false);
-      router.push("/subscription");
-      router.refresh();
+      onCancelled?.();
     } finally {
       setIsCancelling(false);
     }
@@ -1080,28 +1153,50 @@ function SubscriptionStatus({
                       주 {n}회
                     </button>
                   ))}
+                  <button
+                    onClick={() => {
+                      setFrequency(0);
+                      setSelectedPreset(null);
+                      setEditShowCalendar(true);
+                      setEditSelectedDates([]);
+                    }}
+                    className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
+                      frequency === 0
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    자유
+                  </button>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {SCHEDULE_PRESETS.filter(
-                    (p) => p.freq === frequency
-                  ).map((preset) => (
-                    <button
-                      key={preset.label}
-                      onClick={() => {
-                        const toggling = selectedPreset === preset.label;
-                        setSelectedPreset(toggling ? null : preset.label);
-                        if (!toggling) setEditShowCalendar(true);
-                      }}
-                      className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                        selectedPreset === preset.label
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-primary/5 hover:border-primary/30"
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
+                {frequency > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {SCHEDULE_PRESETS.filter(
+                      (p) => p.freq === frequency
+                    ).map((preset) => (
+                      <button
+                        key={preset.label}
+                        onClick={() => {
+                          const toggling = selectedPreset === preset.label;
+                          setSelectedPreset(toggling ? null : preset.label);
+                          if (!toggling) setEditShowCalendar(true);
+                        }}
+                        className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                          selectedPreset === preset.label
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border text-muted-foreground hover:bg-primary/5 hover:border-primary/30"
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {frequency === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    달력에서 원하는 날짜를 자유롭게 선택해주세요
+                  </p>
+                )}
 
                 {editShowCalendar && period.delivery_start && (
                   <DeliveryCalendar
@@ -1191,11 +1286,17 @@ function SubscriptionStatus({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t("frequency")}</span>
                 <span>
-                  주 {currentFrequency}회
-                  {matchedPresetLabel && (
-                    <span className="ml-1.5 text-muted-foreground">
-                      ({matchedPresetLabel})
-                    </span>
+                  {isCustomDates ? (
+                    "자유 선택"
+                  ) : (
+                    <>
+                      주 {currentFrequency}회
+                      {matchedPresetLabel && (
+                        <span className="ml-1.5 text-muted-foreground">
+                          ({matchedPresetLabel})
+                        </span>
+                      )}
+                    </>
                   )}
                 </span>
               </div>
@@ -1241,8 +1342,37 @@ function SubscriptionStatus({
         </CardContent>
       </Card>
 
-      {/* Dithered payment button + home button during application period */}
-      {phase === "applying" && !isEditing && (
+      {/* Solo delivery date warnings */}
+      {soloDates.length > 0 && !isEditing && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-950/30">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="space-y-2">
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                {soloDates.map((sd) => {
+                  const dt = new Date(sd.date + "T00:00:00");
+                  return `${dt.getMonth() + 1}월 ${dt.getDate()}일(${sd.weekday})`;
+                }).join(", ")}
+                은 혼자 신청했어요. 한 분 더 신청해야 배송이 가능해요.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 border-amber-300 text-xs text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                onClick={() => {
+                  const monthLabel = encodeURIComponent(period.target_month);
+                  router.push(`/#subscription-status?month=${monthLabel}`);
+                }}
+              >
+                구독 현황 보기
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dithered payment button + home button during application period (only if payment hasn't started) */}
+      {phase === "applying" && !isEditing && !isInPaymentWindow && (
         <div className="flex gap-2">
           <Link href="/" className="flex-shrink-0">
             <Button variant="outline" className="h-12 text-base">
@@ -1267,8 +1397,8 @@ function SubscriptionStatus({
         </div>
       )}
 
-      {/* Payment Section — only during payment period or if already paid */}
-      {(phase === "paying" || isPaid) && (
+      {/* Payment Section — during payment period, overlapping apply+pay period, or if already paid */}
+      {(phase === "paying" || isPaid || isInPaymentWindow) && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">결제</CardTitle>
@@ -1350,21 +1480,41 @@ function SubscriptionStatus({
                 <CheckCircle2 className="h-4 w-4" />
                 <span>결제가 완료되었습니다</span>
               </div>
-            ) : (
-              <Button
-                className="h-12 w-full text-base"
-                onClick={() => {
-                  if (confirm("결제를 완료하셨으면 [확인]을 눌러주세요.")) {
-                    handleMarkPaid();
-                  }
-                }}
-                disabled={isLoading}
-              >
-                {isLoading && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                결제 완료 신청
-              </Button>
+            ) : soloDates.length > 0 ? (
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-md bg-primary px-4 text-base font-medium text-primary-foreground opacity-40"
+                      />
+                    }
+                  >
+                    결제 완료 신청
+                  </PopoverTrigger>
+                  <PopoverContent side="bottom" className="w-auto px-4 py-3 text-sm">
+                    {soloDates.map((sd) => {
+                      const dt = new Date(sd.date + "T00:00:00");
+                      return `${dt.getMonth() + 1}월 ${dt.getDate()}일(${sd.weekday})`;
+                    }).join(", ")}{" "}
+                    날짜 조정이 필요해요.
+                  </PopoverContent>
+                </Popover>
+              ) : (
+                <Button
+                  className="h-12 w-full text-base"
+                  onClick={() => {
+                    if (confirm("결제를 완료하셨으면 [확인]을 눌러주세요.")) {
+                      handleMarkPaid();
+                    }
+                  }}
+                  disabled={isLoading}
+                >
+                  {isLoading && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  결제 완료 신청
+                </Button>
             )}
           </CardContent>
         </Card>

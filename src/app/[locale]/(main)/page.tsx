@@ -497,7 +497,7 @@ function HomeContent({
 
       {/* Subscription Status */}
       {subStatusProps && (
-        <div className="pt-2">
+        <div id="subscription-status" className="pt-2">
           <SubscriptionStatusView
             currentPeriod={subStatusProps.currentPeriod}
             nextPeriod={subStatusProps.nextPeriod}
