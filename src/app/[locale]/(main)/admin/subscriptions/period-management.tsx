@@ -739,7 +739,6 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                         return (
                                           <>
                                             <Calendar
-                                              mode="default"
                                               defaultMonth={start}
                                               disabled={[
                                                 { before: start },
@@ -1131,7 +1130,6 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                 <div className="space-y-2">
                   <Label>배달 날짜 ({addSubDates.length}일 선택)</Label>
                   <Calendar
-                    mode="default"
                     defaultMonth={start}
                     disabled={[
                       { before: start },
