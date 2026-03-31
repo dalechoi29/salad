@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { getKSTDate, formatDateISO } from "@/lib/utils";
 import type {
@@ -390,7 +390,9 @@ export async function adminAddSubscription(
     return { error: "권한이 없습니다" };
   }
 
-  const { data: existing } = await supabase
+  const admin = createAdminClient();
+
+  const { data: existing } = await admin
     .from("subscriptions")
     .select("id")
     .eq("user_id", userId)
@@ -399,7 +401,7 @@ export async function adminAddSubscription(
 
   if (existing) return { error: "이미 구독 중인 사용자입니다" };
 
-  const { data: inserted, error } = await supabase.from("subscriptions").insert({
+  const { data: inserted, error } = await admin.from("subscriptions").insert({
     user_id: userId,
     period_id: periodId,
     frequency_per_week: frequencyPerWeek,
@@ -432,7 +434,7 @@ export async function adminAddSubscription(
       selected_days: days.sort((a, b) => a - b),
     }));
 
-    const { error: ddError } = await supabase.from("delivery_days").insert(rows);
+    const { error: ddError } = await admin.from("delivery_days").insert(rows);
     if (ddError) return { error: ddError.message };
   }
 
