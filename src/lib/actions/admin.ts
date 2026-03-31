@@ -819,16 +819,20 @@ export async function getSubscriptionDayCounts(
 
   const { data: subscriptions } = await supabase
     .from("subscriptions")
-    .select("id")
+    .select("id, salads_per_delivery")
     .eq("period_id", periodId);
 
   if (!subscriptions?.length) return {};
 
   const subIds = subscriptions.map((s: any) => s.id);
+  const saladsMap = new Map<string, number>();
+  for (const s of subscriptions) {
+    saladsMap.set(s.id, s.salads_per_delivery ?? 1);
+  }
 
   const [{ data: disabledProfiles }, { data: deliveryDays }] = await Promise.all([
     supabase.from("profiles").select("id").eq("status", "disabled"),
-    supabase.from("delivery_days").select("week_start, selected_days, user_id").in("subscription_id", subIds),
+    supabase.from("delivery_days").select("subscription_id, week_start, selected_days, user_id").in("subscription_id", subIds),
   ]);
 
   if (!deliveryDays?.length) return {};
@@ -840,6 +844,7 @@ export async function getSubscriptionDayCounts(
   const dateCounts: Record<string, number> = {};
   for (const dd of deliveryDays) {
     if (disabledUserIds.has(dd.user_id)) continue;
+    const saladsPerDelivery = saladsMap.get(dd.subscription_id) ?? 1;
     for (const day of dd.selected_days) {
       const date = new Date(dd.week_start + "T00:00:00");
       date.setDate(date.getDate() + day - 1);
@@ -847,7 +852,7 @@ export async function getSubscriptionDayCounts(
       const m = String(date.getMonth() + 1).padStart(2, "0");
       const d = String(date.getDate()).padStart(2, "0");
       const dateStr = `${y}-${m}-${d}`;
-      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
+      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
     }
   }
 

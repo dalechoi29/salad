@@ -18,7 +18,7 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  Users,
+  Salad,
   CalendarCheck,
   Loader2,
 } from "lucide-react";
@@ -274,7 +274,7 @@ function MonthCalendar({
                           : "text-muted-foreground/50"
                       }`}
                     >
-                      <Users className="h-4 w-4" />
+                      <Salad className="h-4 w-4" />
                       {count}
                     </span>
                   )}
