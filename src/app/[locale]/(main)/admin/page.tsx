@@ -87,6 +87,7 @@ const adminSections: AdminSection[] = [
         icon: Salad,
         title: "오늘의 샐러드",
         description: "오늘 주문 현황, 냉장고 배치 관리",
+        permission: "todays_salad",
       },
       {
         href: "/admin/subscriptions",

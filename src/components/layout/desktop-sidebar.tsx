@@ -8,30 +8,50 @@ import {
   Salad,
   User,
   Shield,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, usePathname } from "@/i18n/navigation";
 import { cn } from "@/lib/utils";
 import { useUser } from "@/components/providers/user-provider";
 
-const navItems = [
-  { href: "/", icon: Home, labelKey: "home" as const },
-  { href: "/menu", icon: UtensilsCrossed, labelKey: "menu" as const },
-  { href: "/pickup", icon: Salad, labelKey: "mySalad" as const },
-  {
-    href: "/community",
-    icon: Leaf,
-    labelKey: "community" as const,
-  },
-  { href: "/my", icon: User, labelKey: "myPage" as const },
+type NavItem = {
+  href: string;
+  icon: typeof Home;
+  labelKey:
+    | "home"
+    | "menu"
+    | "mySalad"
+    | "community"
+    | "myPage"
+    | "report";
+};
+
+const baseNavItems: NavItem[] = [
+  { href: "/", icon: Home, labelKey: "home" },
+  { href: "/menu", icon: UtensilsCrossed, labelKey: "menu" },
+  { href: "/pickup", icon: Salad, labelKey: "mySalad" },
+  { href: "/community", icon: Leaf, labelKey: "community" },
+  { href: "/my", icon: User, labelKey: "myPage" },
 ];
 
 export function DesktopSidebar() {
   const t = useTranslations("nav");
   const tCommon = useTranslations("common");
   const pathname = usePathname();
-  const { user } = useUser();
+  const { user, permissions } = useUser();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+
+  const navItems: NavItem[] = permissions.includes("vendor_report")
+    ? [
+        ...baseNavItems,
+        {
+          href: "/admin/reports",
+          icon: FileSpreadsheet,
+          labelKey: "report",
+        },
+      ]
+    : baseNavItems;
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 border-r bg-background md:block">

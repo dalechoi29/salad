@@ -3,6 +3,67 @@
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// Remove any user_menu_selections whose delivery_date is no longer in the user's
+// saved delivery_days for this subscription. Without this, if a user moves their
+// delivery from e.g. Apr 7 → Apr 8, the old Apr 7 selection would linger and
+// skew the vendor report (especially for users with salads_per_delivery > 1).
+async function cleanupStaleSelectionsForSubscription(
+  client: SupabaseClient,
+  userId: string,
+  subscriptionId: string,
+  newDeliveryDates: string[]
+): Promise<void> {
+  const { data: sub } = await client
+    .from("subscriptions")
+    .select("subscription_periods(delivery_start, delivery_end)")
+    .eq("id", subscriptionId)
+    .single();
+
+  const period = (sub as any)?.subscription_periods;
+  if (!period?.delivery_start || !period?.delivery_end) return;
+
+  const rangeStart = period.delivery_start.slice(0, 10);
+  const rangeEnd = period.delivery_end.slice(0, 10);
+
+  const { data: existingSelections } = await client
+    .from("user_menu_selections")
+    .select("id, delivery_date")
+    .eq("user_id", userId)
+    .gte("delivery_date", rangeStart)
+    .lte("delivery_date", rangeEnd);
+
+  if (!existingSelections?.length) return;
+
+  const keepSet = new Set(newDeliveryDates);
+  const staleIds = existingSelections
+    .filter((s: any) => !keepSet.has(s.delivery_date))
+    .map((s: any) => s.id);
+
+  if (staleIds.length > 0) {
+    await client.from("user_menu_selections").delete().in("id", staleIds);
+  }
+}
+
+// Collapse DeliveryDay rows into ISO date strings (YYYY-MM-DD).
+function expandDeliveryDaysToDateStrings(
+  rows: { week_start: string; selected_days: number[] | null }[]
+): string[] {
+  const out: string[] = [];
+  for (const dd of rows) {
+    const ws = new Date(dd.week_start + "T00:00:00");
+    for (const dayOfWeek of dd.selected_days ?? []) {
+      const d = new Date(ws);
+      d.setDate(ws.getDate() + (dayOfWeek - 1));
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      out.push(`${y}-${m}-${day}`);
+    }
+  }
+  return out;
+}
 
 export async function getMyDeliveryDays(
   subscriptionId: string
@@ -143,6 +204,13 @@ export async function adminUpdateDeliveryDates(
     .eq("id", subscriptionId);
   if (updError) return { error: updError.message };
 
+  await cleanupStaleSelectionsForSubscription(
+    admin,
+    userId,
+    subscriptionId,
+    deliveryDates
+  );
+
   revalidatePath("/", "layout");
   return { success: true };
 }
@@ -205,6 +273,19 @@ export async function saveDeliveryDays(
 
     if (error) return { error: error.message };
   }
+
+  const { data: allRows } = await supabase
+    .from("delivery_days")
+    .select("week_start, selected_days")
+    .eq("user_id", user.id)
+    .eq("subscription_id", subscriptionId);
+  const newDates = expandDeliveryDaysToDateStrings(allRows ?? []);
+  await cleanupStaleSelectionsForSubscription(
+    supabase,
+    user.id,
+    subscriptionId,
+    newDates
+  );
 
   revalidatePath("/delivery");
   revalidatePath("/");
@@ -269,6 +350,19 @@ export async function bulkSaveDeliveryDays(
       if (insertError) return { error: insertError.message };
     }
   }
+
+  const newDates = expandDeliveryDaysToDateStrings(
+    weeklySelections.map((w) => ({
+      week_start: w.weekStart,
+      selected_days: w.selectedDays,
+    }))
+  );
+  await cleanupStaleSelectionsForSubscription(
+    supabase,
+    user.id,
+    subscriptionId,
+    newDates
+  );
 
   revalidatePath("/delivery");
   revalidatePath("/");

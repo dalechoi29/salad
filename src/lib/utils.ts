@@ -21,6 +21,38 @@ export function getKSTDate(): Date {
   );
 }
 
+/**
+ * Returns true when the menu-selection cutoff for a delivery date has
+ * already passed. The cutoff is defined as: the `cutoffDay` weekday of the
+ * week PRIOR to the delivery date's ISO week (Mon–Sun), at `cutoffTime`
+ * (KST wall-clock, interpreted against the user's current local time).
+ *
+ * `cutoffDay` uses the app convention 1=Mon … 7=Sun. `cutoffTime` is
+ * `"HH:MM"`. Example: default cutoff is Thursday 23:59 the week before.
+ *
+ * Shared by the menu selection UI (to disable selection) and the vendor
+ * report (to mark locked-in dates with a 마감 badge).
+ */
+export function isSelectionClosed(
+  deliveryDateStr: string,
+  cutoffDay: number,
+  cutoffTime: string
+): boolean {
+  const delivery = new Date(deliveryDateStr + "T00:00:00");
+  const deliveryDow = delivery.getDay();
+  const mondayOffset = deliveryDow === 0 ? 6 : deliveryDow - 1;
+  const weekMonday = new Date(delivery);
+  weekMonday.setDate(delivery.getDate() - mondayOffset);
+
+  const prevWeekDay = new Date(weekMonday);
+  prevWeekDay.setDate(weekMonday.getDate() - 7 + (cutoffDay - 1));
+
+  const [hours, minutes] = cutoffTime.split(":").map(Number);
+  prevWeekDay.setHours(hours, minutes, 59, 999);
+
+  return new Date() >= prevWeekDay;
+}
+
 export function getTodayStr(): string {
   return formatDateISO(getKSTDate());
 }

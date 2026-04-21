@@ -4,16 +4,20 @@ import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { ScrollToTop } from "@/components/layout/scroll-to-top";
 import { UserProvider } from "@/components/providers/user-provider";
 import { getCurrentProfile } from "@/lib/actions/auth";
+import { getMyPermissions } from "@/lib/actions/admin";
 
 export default async function MainLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const profile = await getCurrentProfile();
+  const [profile, permissions] = await Promise.all([
+    getCurrentProfile(),
+    getMyPermissions(),
+  ]);
 
   return (
-    <UserProvider user={profile}>
+    <UserProvider user={profile} permissions={permissions}>
       <div className="relative min-h-screen">
         <ScrollToTop />
         <DesktopSidebar />

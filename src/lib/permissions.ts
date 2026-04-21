@@ -9,6 +9,7 @@ export const ALL_PERMISSIONS = [
   { key: "subscription_status", label: "구독 현황", group: "전체 추이" },
   { key: "delivery_summary", label: "배달 현황", group: "전체 추이" },
   { key: "vendor_report", label: "납품 보고서", group: "전체 추이" },
+  { key: "todays_salad", label: "오늘의 샐러드", group: "등록 및 관리" },
   { key: "subscriptions", label: "구독 기간 관리", group: "등록 및 관리" },
   { key: "menus", label: "메뉴 관리", group: "등록 및 관리" },
   { key: "holidays", label: "공휴일 관리", group: "등록 및 관리" },

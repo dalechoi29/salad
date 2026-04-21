@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { getMySubscriptions } from "@/lib/actions/subscription";
 import { getMyDeliveryDays } from "@/lib/actions/delivery";
 import { getMenuSelectionCutoff } from "@/lib/actions/admin";
+import { getDailyMenus, getMyMenuSelections, getMyFavorites } from "@/lib/actions/menu";
 import { deliveryDaysToDateStrings, formatDateISO, getKSTDate } from "@/lib/utils";
 import { MenuSelectionView } from "./menu-selection-view";
 import { MenuSkeleton } from "./menu-skeleton";
@@ -25,6 +26,36 @@ function findSubscriptionForMonth(
   return subscriptions[0] ?? null;
 }
 
+// Monday of the week containing `date` (KST wall clock). Returns ISO string.
+function getWeekMondayISO(date: Date): string {
+  const d = new Date(date);
+  const dow = d.getDay();
+  const diff = dow === 0 ? 6 : dow - 1;
+  d.setDate(d.getDate() - diff);
+  return formatDateISO(d);
+}
+
+function addDaysISO(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return formatDateISO(d);
+}
+
+// Clamp the initial week to the month range so we don't accidentally request
+// rows outside the schedule.
+function getInitialWeekRange(
+  today: Date,
+  rangeStart: string,
+  rangeEnd: string
+): { weekStart: string; weekEnd: string } {
+  const mondayIfTodayInMonth = getWeekMondayISO(today);
+  const weekStart =
+    mondayIfTodayInMonth < rangeStart ? rangeStart : mondayIfTodayInMonth;
+  const weekEndCandidate = addDaysISO(weekStart, 4); // Mon→Fri
+  const weekEnd = weekEndCandidate > rangeEnd ? rangeEnd : weekEndCandidate;
+  return { weekStart, weekEnd };
+}
+
 export default function MenuPage() {
   return (
     <Suspense fallback={<MenuSkeleton />}>
@@ -42,10 +73,21 @@ async function MenuPageContent() {
   const rangeEnd = formatDateISO(monthEnd);
   const todayStr = formatDateISO(today);
 
-  const [allSubscriptions, cutoff] = await Promise.all([
-    getMySubscriptions(),
-    getMenuSelectionCutoff(),
-  ]);
+  // If today falls before the month's first weekday, we still want to scope the
+  // initial load to the first week of the month.
+  const { weekStart: initialWeekStart, weekEnd: initialWeekEnd } =
+    getInitialWeekRange(today, rangeStart, rangeEnd);
+
+  // Only load the current week's menu data + selections on the server.
+  // Adjacent weeks are lazy-loaded client-side on demand to keep first paint fast.
+  const [allSubscriptions, cutoff, initialMenus, initialSelections, initialFavorites] =
+    await Promise.all([
+      getMySubscriptions(),
+      getMenuSelectionCutoff(),
+      getDailyMenus(initialWeekStart, initialWeekEnd),
+      getMyMenuSelections(initialWeekStart, initialWeekEnd),
+      getMyFavorites(),
+    ]);
 
   const subscription = findSubscriptionForMonth(allSubscriptions, rangeStart, rangeEnd);
 
@@ -65,6 +107,11 @@ async function MenuPageContent() {
       cutoffDay={cutoff.day}
       cutoffTime={cutoff.time}
       saladsPerDelivery={saladsPerDelivery}
+      initialMenus={initialMenus}
+      initialSelections={initialSelections}
+      initialFavoriteIds={initialFavorites.map((f) => f.menu_id)}
+      initialWeekStart={initialWeekStart}
+      initialWeekEnd={initialWeekEnd}
     />
   );
 }

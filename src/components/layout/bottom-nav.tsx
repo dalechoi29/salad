@@ -1,21 +1,53 @@
 "use client";
 
-import { Home, UtensilsCrossed, Salad, Leaf, User } from "lucide-react";
+import {
+  Home,
+  UtensilsCrossed,
+  Salad,
+  Leaf,
+  User,
+  FileSpreadsheet,
+} from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, usePathname } from "@/i18n/navigation";
 import { cn } from "@/lib/utils";
+import { useUser } from "@/components/providers/user-provider";
 
-const navItems = [
-  { href: "/", icon: Home, labelKey: "home" as const },
-  { href: "/menu", icon: UtensilsCrossed, labelKey: "menu" as const },
-  { href: "/pickup", icon: Salad, labelKey: "mySalad" as const },
-  { href: "/community", icon: Leaf, labelKey: "community" as const },
-  { href: "/my", icon: User, labelKey: "myPage" as const },
+type NavItem = {
+  href: string;
+  icon: typeof Home;
+  labelKey:
+    | "home"
+    | "menu"
+    | "mySalad"
+    | "community"
+    | "myPage"
+    | "report";
+};
+
+const baseNavItems: NavItem[] = [
+  { href: "/", icon: Home, labelKey: "home" },
+  { href: "/menu", icon: UtensilsCrossed, labelKey: "menu" },
+  { href: "/pickup", icon: Salad, labelKey: "mySalad" },
+  { href: "/community", icon: Leaf, labelKey: "community" },
+  { href: "/my", icon: User, labelKey: "myPage" },
 ];
 
 export function BottomNav() {
   const t = useTranslations("nav");
   const pathname = usePathname();
+  const { permissions } = useUser();
+
+  const navItems: NavItem[] = permissions.includes("vendor_report")
+    ? [
+        ...baseNavItems,
+        {
+          href: "/admin/reports",
+          icon: FileSpreadsheet,
+          labelKey: "report",
+        },
+      ]
+    : baseNavItems;
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">

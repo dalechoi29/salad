@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -15,8 +16,40 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
-import { getVendorReport, type VendorReportRow } from "@/lib/actions/admin";
-import { getMonthRange, formatMonthLabel } from "@/lib/utils";
+import {
+  getMenuSelectionCutoff,
+  getVendorReport,
+  type VendorReportRow,
+} from "@/lib/actions/admin";
+import {
+  formatMonthLabel,
+  getMonthRange,
+  isSelectionClosed,
+} from "@/lib/utils";
+
+const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
+
+function getMondayISO(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = d.getDay();
+  const diff = dow === 0 ? 6 : dow - 1;
+  d.setDate(d.getDate() - diff);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatWeekRange(mondayISO: string): string {
+  const mon = new Date(mondayISO + "T00:00:00");
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const mm = mon.getMonth() + 1;
+  const md = mon.getDate();
+  const sm = sun.getMonth() + 1;
+  const sd = sun.getDate();
+  return `${mm}/${md} ~ ${sm}/${sd}`;
+}
 
 export function VendorReportView() {
   const now = new Date();
@@ -24,6 +57,22 @@ export function VendorReportView() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [rows, setRows] = useState<VendorReportRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showSummary, setShowSummary] = useState(false);
+  const [cutoff, setCutoff] = useState<{ day: number; time: string }>({
+    day: 4,
+    time: "23:59",
+  });
+
+  // Cutoff is global admin config; fetch once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getMenuSelectionCutoff().then((c) => {
+      if (!cancelled) setCutoff(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,17 +86,33 @@ export function VendorReportView() {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [year, month]);
 
+  // Derive a locked/open flag per row so each render doesn't recompute per
+  // cell. Recomputed only when rows or cutoff change.
+  const rowStatus = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const r of rows) {
+      m.set(r.date, isSelectionClosed(r.date, cutoff.day, cutoff.time));
+    }
+    return m;
+  }, [rows, cutoff.day, cutoff.time]);
+
   function goToPrevMonth() {
-    if (month === 1) { setYear((y) => y - 1); setMonth(12); }
-    else setMonth((m) => m - 1);
+    if (month === 1) {
+      setYear((y) => y - 1);
+      setMonth(12);
+    } else setMonth((m) => m - 1);
   }
 
   function goToNextMonth() {
-    if (month === 12) { setYear((y) => y + 1); setMonth(1); }
-    else setMonth((m) => m + 1);
+    if (month === 12) {
+      setYear((y) => y + 1);
+      setMonth(1);
+    } else setMonth((m) => m + 1);
   }
 
   function exportCSV() {
@@ -85,7 +150,9 @@ export function VendorReportView() {
     csvRows.push(totalRow.join(","));
 
     const bom = "\uFEFF";
-    const blob = new Blob([bom + csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([bom + csvRows.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -94,18 +161,37 @@ export function VendorReportView() {
     URL.revokeObjectURL(url);
   }
 
-  const [showSummary, setShowSummary] = useState(false);
+  // ── Group rows by ISO week (Mon–Sun) for the summary view ────────────────
+  const weekGroups = useMemo(() => {
+    const map = new Map<string, VendorReportRow[]>();
+    for (const r of rows) {
+      const mon = getMondayISO(r.date);
+      if (!map.has(mon)) map.set(mon, []);
+      map.get(mon)!.push(r);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([mondayISO, weekRows]) => ({
+        mondayISO,
+        rangeLabel: formatWeekRange(mondayISO),
+        rows: weekRows,
+      }));
+  }, [rows]);
 
-  function generateDailySummary(row: VendorReportRow): string {
+  function formatDailyLine(row: VendorReportRow): string {
     const dateObj = new Date(row.date + "T00:00:00");
     const m = dateObj.getMonth() + 1;
     const d = dateObj.getDate();
-    const menuParts = row.menuBreakdown.map((mb) => `${mb.menuTitle} ${mb.count}개`).join(", ");
-    return `${m}월 ${d}일은 ${menuParts} 배송 부탁드려요:)`;
+    const dow = WEEKDAY_LABELS[dateObj.getDay()];
+    const menuParts = row.menuBreakdown
+      .map((mb) => `${mb.menuTitle} ${mb.count}개`)
+      .join(", ");
+    return `- ${m}월 ${d}일(${dow})\n${menuParts}`;
   }
 
-  function generateFullSummary(): string {
-    return rows.map(generateDailySummary).join("\n");
+  function generateWeeklySummary(weekRows: VendorReportRow[]): string {
+    const body = weekRows.map(formatDailyLine).join("\n\n");
+    return `안녕하세요! 이번주 메뉴 전달드려요:)\n\n${body}`;
   }
 
   const grandTotal = rows.reduce((s, r) => s + r.totalSalads, 0);
@@ -124,13 +210,23 @@ export function VendorReportView() {
       {/* Month navigation + export */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={goToPrevMonth}>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={goToPrevMonth}
+          >
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="min-w-[100px] text-center text-sm font-semibold">
             {formatMonthLabel(year, month)}
           </span>
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={goToNextMonth}>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={goToNextMonth}
+          >
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
@@ -182,7 +278,7 @@ export function VendorReportView() {
             </Card>
           </div>
 
-          {/* Summary message */}
+          {/* Summary message (per week) */}
           <Button
             variant="outline"
             size="sm"
@@ -194,32 +290,50 @@ export function VendorReportView() {
           </Button>
 
           {showSummary && (
-            <div className="relative rounded-lg bg-muted/70 p-4">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-2 top-2 h-7 w-7"
-                onClick={() => {
-                  navigator.clipboard.writeText(generateFullSummary());
-                  toast.success("클립보드에 복사되었습니다");
-                }}
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
-              <div className="space-y-1.5 pr-8">
-                {rows.map((row) => (
-                  <p key={row.date} className="text-sm leading-relaxed">
-                    {generateDailySummary(row)}
-                  </p>
-                ))}
-              </div>
+            <div className="space-y-3">
+              {weekGroups.map((wg) => {
+                const text = generateWeeklySummary(wg.rows);
+                return (
+                  <div
+                    key={wg.mondayISO}
+                    className="relative rounded-lg bg-muted/70 p-4"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-muted-foreground">
+                        {wg.rangeLabel}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => {
+                          navigator.clipboard.writeText(text);
+                          toast.success("클립보드에 복사되었습니다");
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
+                      {text}
+                    </pre>
+                  </div>
+                );
+              })}
             </div>
           )}
 
           {/* Detail table */}
           <Card>
-            <CardHeader>
+            <CardHeader className="space-y-1">
               <CardTitle className="text-sm">일별 상세</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                <span className="inline-flex items-center rounded bg-secondary px-1.5 py-0.5 font-semibold">
+                  마감
+                </span>{" "}
+                표시가 있는 날은 메뉴 선택이 마감되어 수량이 확정되었어요.
+                나머지 날은 신청 변경으로 수량이 달라질 수 있어요.
+              </p>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -231,25 +345,50 @@ export function VendorReportView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.date} className="border-b last:border-0">
-                      <td className="py-2.5 pr-4 font-medium">{row.date}</td>
+                  {rows.map((row) => {
+                    const closed = rowStatus.get(row.date) ?? false;
+                    return (
+                    <tr key={row.date} className="border-b align-top last:border-0">
+                      <td className="py-2.5 pr-4 font-medium">
+                        <div className="flex items-center gap-1.5">
+                          <span>{row.date}</span>
+                          {closed && (
+                            <Badge
+                              variant="secondary"
+                              className="px-1.5 py-0 text-[10px]"
+                            >
+                              마감
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-2.5 pr-4 font-bold">{row.totalSalads}</td>
                       <td className="py-2.5">
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-col gap-2">
                           {row.menuBreakdown.map((m) => (
-                            <span
-                              key={m.menuTitle}
-                              className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs"
-                            >
-                              {m.menuTitle}
-                              <span className="ml-1 font-bold">{m.count}</span>
-                            </span>
+                            <div key={m.menuTitle} className="flex flex-col gap-1">
+                              <span className="inline-flex w-fit items-center rounded-full bg-secondary px-2 py-0.5 text-xs">
+                                {m.menuTitle}
+                                <span className="ml-1 font-bold">{m.count}</span>
+                              </span>
+                              {m.pickers.length > 0 && (
+                                <span className="text-xs text-muted-foreground">
+                                  {m.pickers
+                                    .map((p) =>
+                                      p.count > 1
+                                        ? `${p.name}×${p.count}`
+                                        : p.name
+                                    )
+                                    .join(", ")}
+                                </span>
+                              )}
+                            </div>
                           ))}
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 font-bold">

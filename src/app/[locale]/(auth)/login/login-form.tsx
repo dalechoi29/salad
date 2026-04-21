@@ -114,7 +114,7 @@ export function LoginForm() {
 
       localStorage.removeItem("salad_pending_email");
       toast.success("환영해요! 건강한 끼니에요");
-      router.push("/");
+      router.push(result.redirectTo ?? "/");
       router.refresh();
     } catch {
       setIsLoading(false);

@@ -30,6 +30,7 @@ import { HomePickupCard } from "./home-pickup-card";
 import { HomeFridgeCard } from "./home-fridge-card";
 import { SubscriptionStatusView } from "./admin/subscription-status/subscription-status-view";
 import { HomeSkeleton } from "./home-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { DailyMenu, MenuSelection, Subscription, SubscriptionPeriod, Holiday, DailySaladStatus } from "@/types";
 
 function findCurrentSubscription(
@@ -57,10 +58,8 @@ export default function HomePage() {
   );
 }
 
-async function HomePageContent() {
-  const todayStr = getTodayStr();
+async function SubscriptionStatusSection() {
   const kstNow = getKSTDate();
-  const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
   const cm = kstNow.getMonth() + 1;
   const cy = kstNow.getFullYear();
   const nm = cm === 12 ? 1 : cm + 1;
@@ -68,9 +67,40 @@ async function HomePageContent() {
   const curMonthStr = `${cy}년 ${cm}월`;
   const nxtMonthStr = `${ny}년 ${nm}월`;
 
-  // Fetch all independent data in a single parallel batch.
-  // getSubscriptionPeriods, getActivePeriod, getHolidays, and getAuthUser are
-  // request-scoped cached, so duplicate calls across actions are free.
+  const [allPeriods, hols, profile] = await Promise.all([
+    getSubscriptionPeriods(),
+    getHolidays(),
+    getCurrentProfile(),
+  ]);
+
+  const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
+  const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
+
+  const [cc, nc] = await Promise.all([
+    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : {},
+    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : {},
+  ]);
+
+  return (
+    <SubscriptionStatusView
+      currentPeriod={curPeriod}
+      nextPeriod={nxtPeriod}
+      currentCounts={cc}
+      nextCounts={nc}
+      holidays={hols}
+      showBackButton={false}
+      showTitle
+      isLoggedIn={!!profile}
+    />
+  );
+}
+
+async function HomePageContent() {
+  const todayStr = getTodayStr();
+  const kstNow = getKSTDate();
+  const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
+
+  // Single parallel batch for all independent data
   const [
     profile,
     period,
@@ -79,8 +109,7 @@ async function HomePageContent() {
     streak,
     todayPickups,
     todaySelections,
-    allPeriods,
-    hols,
+    saladStatus,
   ] = await Promise.all([
     getCurrentProfile(),
     getActivePeriod(),
@@ -89,19 +118,17 @@ async function HomePageContent() {
     getPickupStreak(),
     getMyPickups(todayStr, todayStr),
     getMyMenuSelections(todayStr, todayStr),
-    getSubscriptionPeriods(),
-    getHolidays(),
+    getDailySaladStatus(todayStr),
   ]);
 
   const subscription = findCurrentSubscription(allSubscriptions, todayStr);
-  const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
-  const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
+  const isAdmin = profile?.role === "admin" || profile?.role === "super_admin";
 
-  const [periodSubscription, deliveryDays, cc, nc] = await Promise.all([
+  // Second batch: all dependent fetches in parallel
+  const [periodSubscription, deliveryDays, companyUsers] = await Promise.all([
     period ? getMySubscription(period.id) : null,
     subscription ? getMyDeliveryDays(subscription.id) : [],
-    curPeriod ? getSubscriptionDayCounts(curPeriod.id) : {},
-    nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : {},
+    isAdmin ? getCompanyUsers() : [],
   ]);
 
   let deliveryDayCount = 0;
@@ -134,20 +161,6 @@ async function HomePageContent() {
       ? (todaySelections[0].daily_menu_assignment as any)?.menu?.title ?? null
       : null;
 
-  const isAdmin = profile?.role === "admin" || profile?.role === "super_admin";
-  const [saladStatus, companyUsers] = await Promise.all([
-    getDailySaladStatus(todayStr),
-    isAdmin ? getCompanyUsers() : [],
-  ]);
-
-  const subStatusProps = {
-    currentPeriod: curPeriod,
-    nextPeriod: nxtPeriod,
-    currentCounts: cc,
-    nextCounts: nc,
-    holidays: hols,
-  };
-
   return (
     <HomeContent
       isLoggedIn={!!profile}
@@ -169,7 +182,6 @@ async function HomePageContent() {
       saladStatus={saladStatus}
       companyUsers={companyUsers as { id: string; realName: string }[]}
       currentUserName={profile?.real_name ?? ""}
-      subStatusProps={subStatusProps}
     />
   );
 }
@@ -203,7 +215,6 @@ function HomeContent({
   saladStatus,
   companyUsers,
   currentUserName,
-  subStatusProps,
 }: {
   isLoggedIn: boolean;
   isAdmin: boolean;
@@ -224,13 +235,6 @@ function HomeContent({
   saladStatus: DailySaladStatus | null;
   companyUsers: { id: string; realName: string }[];
   currentUserName: string;
-  subStatusProps: {
-    currentPeriod: SubscriptionPeriod | null;
-    nextPeriod: SubscriptionPeriod | null;
-    currentCounts: Record<string, number>;
-    nextCounts: Record<string, number>;
-    holidays: Holiday[];
-  } | null;
 }) {
   const t = useTranslations("home");
   const tSub = useTranslations("subscription");
@@ -495,21 +499,20 @@ function HomeContent({
         </Link>
       )}
 
-      {/* Subscription Status */}
-      {subStatusProps && (
-        <div id="subscription-status" className="pt-2">
-          <SubscriptionStatusView
-            currentPeriod={subStatusProps.currentPeriod}
-            nextPeriod={subStatusProps.nextPeriod}
-            currentCounts={subStatusProps.currentCounts}
-            nextCounts={subStatusProps.nextCounts}
-            holidays={subStatusProps.holidays}
-            showBackButton={false}
-            showTitle
-            isLoggedIn={isLoggedIn}
-          />
-        </div>
-      )}
+      {/* Subscription Status - loaded independently */}
+      <div id="subscription-status" className="pt-2">
+        <Suspense
+          fallback={
+            <Card>
+              <CardContent className="flex items-center justify-center py-8">
+                <Skeleton className="h-40 w-full" />
+              </CardContent>
+            </Card>
+          }
+        >
+          <SubscriptionStatusSection />
+        </Suspense>
+      </div>
 
       {/* Show subscription card at bottom if not in actionable period or already paid */}
       {(!isActionablePeriod || isPeriodPaid) && subscriptionCard}

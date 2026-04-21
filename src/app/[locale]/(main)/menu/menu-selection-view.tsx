@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card,
   CardContent,
@@ -23,7 +23,7 @@ import {
   Plus,
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
-import { formatDateShort } from "@/lib/utils";
+import { formatDateShort, isSelectionClosed } from "@/lib/utils";
 import type { DailyMenu, MenuSelection, DietaryPreference } from "@/types";
 import {
   getDailyMenus,
@@ -74,26 +74,6 @@ function getWeekNumber(dateStr: string): string {
   return `${y}-${m}-${day}`;
 }
 
-function isSelectionClosed(
-  deliveryDateStr: string,
-  cutoffDay: number,
-  cutoffTime: string
-): boolean {
-  const delivery = new Date(deliveryDateStr + "T00:00:00");
-  const deliveryDow = delivery.getDay();
-  const mondayOffset = deliveryDow === 0 ? 6 : deliveryDow - 1;
-  const weekMonday = new Date(delivery);
-  weekMonday.setDate(delivery.getDate() - mondayOffset);
-
-  const prevWeekDay = new Date(weekMonday);
-  prevWeekDay.setDate(weekMonday.getDate() - 7 + (cutoffDay - 1));
-
-  const [hours, minutes] = cutoffTime.split(":").map(Number);
-  prevWeekDay.setHours(hours, minutes, 59, 999);
-
-  return new Date() >= prevWeekDay;
-}
-
 interface MenuSelectionViewProps {
   deliveryStart: string | null;
   deliveryEnd: string | null;
@@ -102,6 +82,11 @@ interface MenuSelectionViewProps {
   cutoffDay?: number;
   cutoffTime?: string;
   saladsPerDelivery?: number;
+  initialMenus?: DailyMenu[];
+  initialSelections?: MenuSelection[];
+  initialFavoriteIds?: string[];
+  initialWeekStart?: string;
+  initialWeekEnd?: string;
 }
 
 export function MenuSelectionView({
@@ -112,12 +97,30 @@ export function MenuSelectionView({
   cutoffDay = 4,
   cutoffTime = "23:59",
   saladsPerDelivery = 1,
+  initialMenus,
+  initialSelections,
+  initialFavoriteIds,
+  initialWeekStart,
+  initialWeekEnd,
 }: MenuSelectionViewProps) {
-  const [dailyMenus, setDailyMenus] = useState<DailyMenu[]>([]);
-  const [selections, setSelections] = useState<MenuSelection[]>([]);
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
+  const hasInitialData = !!initialMenus;
+  const [dailyMenus, setDailyMenus] = useState<DailyMenu[]>(initialMenus ?? []);
+  const [selections, setSelections] = useState<MenuSelection[]>(initialSelections ?? []);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set(initialFavoriteIds ?? []));
+  const [loading, setLoading] = useState(!hasInitialData);
   const [updatingMenuId, setUpdatingMenuId] = useState<string | null>(null);
+
+  // Track which week-Monday keys we've already fetched so we never refetch and
+  // can show a per-week skeleton when a week hasn't loaded yet.
+  const loadedWeeksRef = useRef<Set<string>>(
+    new Set(
+      initialWeekStart
+        ? [initialWeekStart]
+        : []
+    )
+  );
+  const inFlightWeeksRef = useRef<Set<string>>(new Set());
+  const [weekLoading, setWeekLoading] = useState<string | null>(null);
 
   const router = useRouter();
   const allWeekdays =
@@ -162,14 +165,70 @@ export function MenuSelectionView({
       setDailyMenus(menuData);
       setSelections(selData);
       setFavoriteIds(new Set(favData.map((f) => f.menu_id)));
+      // Whole-range load: mark every week we know about as loaded.
+      for (const wk of Object.keys(weeks)) {
+        loadedWeeksRef.current.add(wk);
+      }
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deliveryStart, deliveryEnd]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (!hasInitialData) loadData();
+  }, [loadData, hasInitialData]);
+
+  // Lazy-load a single week's menus + selections on demand. Safe to call
+  // redundantly: in-flight requests and already-loaded weeks are deduped.
+  const loadWeek = useCallback(
+    async (weekMonday: string, opts: { showSkeleton?: boolean } = {}) => {
+      if (!weekMonday) return;
+      if (loadedWeeksRef.current.has(weekMonday)) return;
+      if (inFlightWeeksRef.current.has(weekMonday)) return;
+
+      const weekEnd = (() => {
+        const d = new Date(weekMonday + "T00:00:00");
+        d.setDate(d.getDate() + 4); // Mon→Fri
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      })();
+
+      inFlightWeeksRef.current.add(weekMonday);
+      if (opts.showSkeleton) setWeekLoading(weekMonday);
+      try {
+        const [menuData, selData] = await Promise.all([
+          getDailyMenus(weekMonday, weekEnd),
+          getMyMenuSelections(weekMonday, weekEnd),
+        ]);
+        setDailyMenus((prev) => {
+          const existingIds = new Set(prev.map((dm) => dm.id));
+          const merged = [...prev];
+          for (const dm of menuData) {
+            if (!existingIds.has(dm.id)) merged.push(dm);
+          }
+          return merged;
+        });
+        setSelections((prev) => {
+          const key = (s: MenuSelection) =>
+            `${s.user_id}|${s.delivery_date}|${s.daily_menu_id}`;
+          const existing = new Set(prev.map(key));
+          const merged = [...prev];
+          for (const s of selData) {
+            if (!existing.has(key(s))) merged.push(s);
+          }
+          return merged;
+        });
+        loadedWeeksRef.current.add(weekMonday);
+      } finally {
+        inFlightWeeksRef.current.delete(weekMonday);
+        setWeekLoading((cur) => (cur === weekMonday ? null : cur));
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (weekKeys.length > 0) {
@@ -195,6 +254,19 @@ export function MenuSelectionView({
       }
     }
   }, [weekKeys.length]);
+
+  // When the user navigates to a week, make sure its data is fetched. Also
+  // prefetch its immediate neighbors in the background so arrow presses feel
+  // instant. The initial week is already loaded on the server.
+  useEffect(() => {
+    if (!currentWeekKey) return;
+    void loadWeek(currentWeekKey, { showSkeleton: true });
+
+    const prev = weekKeys[currentWeekIdx - 1];
+    const next = weekKeys[currentWeekIdx + 1];
+    if (prev) void loadWeek(prev);
+    if (next) void loadWeek(next);
+  }, [currentWeekKey, currentWeekIdx, weekKeys, loadWeek]);
 
   function getMenusForDate(dateStr: string): DailyMenu[] {
     return dailyMenus.filter((dm) => dm.delivery_date === dateStr);
@@ -375,7 +447,36 @@ export function MenuSelectionView({
       </div>
 
       <div className="space-y-4">
-        {currentWeekDates.map((dateStr) => {
+        {weekLoading === currentWeekKey ? (
+          <>
+            {[1, 2, 3].map((i) => (
+              <Card key={`week-skeleton-${i}`}>
+                <CardHeader className="pb-2">
+                  <Skeleton className="h-5 w-24" />
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {[1, 2].map((j) => (
+                    <div
+                      key={j}
+                      className="flex gap-3 rounded-lg border p-2.5"
+                    >
+                      <Skeleton className="h-24 w-24 rounded-lg" />
+                      <div className="flex-1 space-y-2 py-1">
+                        <Skeleton className="h-5 w-6" />
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-20" />
+                      </div>
+                      <div className="flex items-center">
+                        <Skeleton className="h-8 w-16 rounded-md" />
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ))}
+          </>
+        ) : (
+          currentWeekDates.map((dateStr) => {
           const menusForDay = getMenusForDate(dateStr);
           const dayTotal = getDayTotal(dateStr);
           const dayComplete = !isBrowseOnly && dayTotal >= saladsPerDelivery;
@@ -556,7 +657,8 @@ export function MenuSelectionView({
               </CardContent>
             </Card>
           );
-        })}
+        })
+        )}
       </div>
     </div>
   );

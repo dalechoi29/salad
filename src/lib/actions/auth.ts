@@ -1,10 +1,21 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
+import {
+  createAdminClient,
+  createClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
 
 export type AuthResult = {
   error?: string;
   success?: boolean;
+  /**
+   * Optional post-login landing path (without locale prefix). When present,
+   * the client should navigate here instead of the default home page. Used to
+   * send vendor-report-only admins straight to their report page on login
+   * while still allowing them to navigate to `/` afterwards.
+   */
+  redirectTo?: string;
 };
 
 export async function signup(formData: FormData): Promise<AuthResult> {
@@ -108,7 +119,7 @@ export async function login(formData: FormData): Promise<AuthResult> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("status, role")
+    .select("id, status, role")
     .eq("email", email)
     .single();
 
@@ -127,7 +138,27 @@ export async function login(formData: FormData): Promise<AuthResult> {
     return { error: "ACCOUNT_DISABLED" };
   }
 
-  return { success: true };
+  // A vendor-report-only admin (role=admin, not super_admin) should land
+  // directly on the vendor report after login. Super admins and regular
+  // users land on the home page as usual. We use the service role client to
+  // read admin_permissions, since its RLS policy restricts reads to
+  // super_admin; scoping by the just-authenticated user's own id keeps this
+  // safe.
+  let redirectTo: string | undefined;
+  if (profile.role === "admin") {
+    const admin = createAdminClient();
+    const { data: perms } = await admin
+      .from("admin_permissions")
+      .select("permission")
+      .eq("user_id", profile.id)
+      .eq("permission", "vendor_report")
+      .limit(1);
+    if ((perms?.length ?? 0) > 0) {
+      redirectTo = "/admin/reports";
+    }
+  }
+
+  return { success: true, redirectTo };
 }
 
 export async function logout() {

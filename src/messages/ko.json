@@ -24,7 +24,8 @@
     "mySalad": "내 샐러드",
     "community": "대나무숲",
     "myPage": "내 공간",
-    "admin": "관리자"
+    "admin": "관리자",
+    "report": "리포트"
   },
   "auth": {
     "login": "로그인",

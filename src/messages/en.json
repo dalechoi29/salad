@@ -24,7 +24,8 @@
     "mySalad": "My Salad",
     "community": "Bamboo Forest",
     "myPage": "My Space",
-    "admin": "Admin"
+    "admin": "Admin",
+    "report": "Report"
   },
   "auth": {
     "login": "Login",

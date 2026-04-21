@@ -5,19 +5,24 @@ import type { Profile } from "@/types";
 
 type UserContextType = {
   user: Profile | null;
+  permissions: string[];
 };
 
-const UserContext = createContext<UserContextType>({ user: null });
+const UserContext = createContext<UserContextType>({ user: null, permissions: [] });
 
 export function UserProvider({
   user,
+  permissions = [],
   children,
 }: {
   user: Profile | null;
+  permissions?: string[];
   children: React.ReactNode;
 }) {
   return (
-    <UserContext.Provider value={{ user }}>{children}</UserContext.Provider>
+    <UserContext.Provider value={{ user, permissions }}>
+      {children}
+    </UserContext.Provider>
   );
 }
 
