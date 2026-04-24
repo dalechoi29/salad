@@ -615,7 +615,11 @@ export async function getSubscriptionSummaryText(
     for (const sub of subs) {
       const freq = sub.frequency_per_week as number;
       const salads = sub.salads_per_delivery as number;
-      const totalDays = sub.total_delivery_days ?? freq * 4;
+      // Use `||` (not `??`) so rows stored with total_delivery_days = 0
+      // also fall back to the frequency-based estimate. Without this, a
+      // subscriber who paid but never committed dates shows up as 0원
+      // in the summary even though they were charged the full amount.
+      const totalDays = (sub.total_delivery_days as number | null) || freq * 4;
       const totalSalads = totalDays * salads;
       const price = totalSalads * (periodData.price_per_salad ?? 0);
       const name = sub.profiles?.real_name ?? "이름 없음";

@@ -131,6 +131,33 @@ async function HomePageContent() {
     isAdmin ? getCompanyUsers() : [],
   ]);
 
+  // For the "paid but haven't finished picking dates" CTA, we need the
+  // active period's delivery days. During the overlap window (e.g. April
+  // delivering while May is open for payment) periodSubscription and
+  // subscription point at different rows; in the common case they match
+  // and we reuse `deliveryDays` without an extra query.
+  const periodDeliveryDays =
+    periodSubscription && subscription?.id === periodSubscription.id
+      ? deliveryDays
+      : periodSubscription
+        ? await getMyDeliveryDays(periodSubscription.id)
+        : [];
+
+  // Compute the "needs to pick more dates" flag. Same `|| frequency × 4`
+  // fallback we use in the admin roster so a subscriber whose row has
+  // total_delivery_days=0 still gets prompted to finish picking. Only
+  // nags paid subscribers — pending users haven't committed yet.
+  let needsMoreDeliveryDates = false;
+  let remainingDeliverySlots = 0;
+  if (periodSubscription?.payment_status === "completed") {
+    const storedTotal = periodSubscription.total_delivery_days ?? 0;
+    const frequency = periodSubscription.frequency_per_week ?? 0;
+    const effectiveTotal = storedTotal || frequency * 4;
+    const selectedCount = countSelectedDays(periodDeliveryDays);
+    remainingDeliverySlots = Math.max(0, effectiveTotal - selectedCount);
+    needsMoreDeliveryDates = remainingDeliverySlots > 0;
+  }
+
   let deliveryDayCount = 0;
   let nextDeliveryDate: string | null = null;
   let nextDeliveryMenus: DailyMenu[] = [];
@@ -182,6 +209,8 @@ async function HomePageContent() {
       saladStatus={saladStatus}
       companyUsers={companyUsers as { id: string; realName: string }[]}
       currentUserName={profile?.real_name ?? ""}
+      needsMoreDeliveryDates={needsMoreDeliveryDates}
+      remainingDeliverySlots={remainingDeliverySlots}
     />
   );
 }
@@ -215,6 +244,8 @@ function HomeContent({
   saladStatus,
   companyUsers,
   currentUserName,
+  needsMoreDeliveryDates,
+  remainingDeliverySlots,
 }: {
   isLoggedIn: boolean;
   isAdmin: boolean;
@@ -235,6 +266,8 @@ function HomeContent({
   saladStatus: DailySaladStatus | null;
   companyUsers: { id: string; realName: string }[];
   currentUserName: string;
+  needsMoreDeliveryDates: boolean;
+  remainingDeliverySlots: number;
 }) {
   const t = useTranslations("home");
   const tSub = useTranslations("subscription");
@@ -457,6 +490,30 @@ function HomeContent({
           </div>
         )}
       </div>
+
+      {/* Paid-but-not-finished-picking CTA. Only shown to a user whose
+          active-period subscription is marked complete but still has
+          unfilled delivery slots. Sits below today's menus so it reads
+          as "finish what you've paid for" follow-up action. */}
+      {needsMoreDeliveryDates && (
+        <Link href="/delivery" className="block">
+          <Card className="border-red-300 bg-red-50 transition-colors hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:hover:bg-red-950/60">
+            <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/15">
+                <CalendarCheck className="h-5 w-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <CardTitle className="text-base text-red-700 dark:text-red-300">
+                  배달 날짜를 선택해주세요
+                </CardTitle>
+                <p className="text-sm text-red-700/80 dark:text-red-300/80">
+                  결제가 완료되었어요. 아직 {remainingDeliverySlots}일의 배달 날짜를 더 선택해야 해요.
+                </p>
+              </div>
+            </CardHeader>
+          </Card>
+        </Link>
+      )}
 
       {isLoggedIn && (
         <Link href="/menu" className="block">

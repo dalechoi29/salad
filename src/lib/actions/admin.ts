@@ -1401,7 +1401,8 @@ export async function getPeriodSubscribers(
     if (!profile || profile.disabled) continue;
 
     const salads = (sub.salads_per_delivery as number | null) ?? 1;
-    const totalDeliveryDays = (sub.total_delivery_days as number | null) ?? 0;
+    const frequency = (sub.frequency_per_week as number | null) ?? 0;
+    const storedTotalDays = (sub.total_delivery_days as number | null) ?? 0;
     const deliveryDates = [...(datesBySub.get(sub.id as string) ?? [])].sort();
     const paymentStatus =
       (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending";
@@ -1420,13 +1421,23 @@ export async function getPeriodSubscribers(
     // visual treatment.
     if (paymentStatus !== "completed" && deliveryDates.length === 0) continue;
 
+    // Some subscription rows end up with total_delivery_days = 0 / null
+    // (e.g. when the user subscribes with a frequency but never commits
+    // any dates, yet still pays). In that case the raw field is useless
+    // for pricing and for the admin's "remaining picks" follow-up. Fall
+    // back to `frequency × 4` (the same 4-weeks-per-month convention
+    // used by getDeliverySummary) so the admin sees the price the
+    // subscriber was actually charged for and the correct remaining
+    // slot count. Free-select subscribers (frequency=0) with no stored
+    // total stay at 0 — we genuinely don't know their intended count.
+    const totalDeliveryDays = storedTotalDays || frequency * 4;
     const price = totalDeliveryDays * salads * pricePerSalad;
 
     result.push({
       subscriptionId: sub.id as string,
       userId: sub.user_id as string,
       realName: profile.realName,
-      frequencyPerWeek: (sub.frequency_per_week as number | null) ?? 0,
+      frequencyPerWeek: frequency,
       saladsPerDelivery: salads,
       totalDeliveryDays,
       paymentStatus,
