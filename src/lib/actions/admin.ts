@@ -1403,13 +1403,22 @@ export async function getPeriodSubscribers(
     const salads = (sub.salads_per_delivery as number | null) ?? 1;
     const totalDeliveryDays = (sub.total_delivery_days as number | null) ?? 0;
     const deliveryDates = [...(datesBySub.get(sub.id as string) ?? [])].sort();
+    const paymentStatus =
+      (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending";
 
-    // Align with the home "구독 현황" calendar: only count someone as an
-    // actual subscriber for this period if they have at least one picked
-    // delivery date. Ghost rows (subscription created but dates never
-    // committed, or all dates removed) are excluded so both views show
-    // the same roster.
-    if (deliveryDates.length === 0) continue;
+    // Hide TRUE ghost rows only — subscriptions that were created but
+    // the user never paid AND never committed any dates. Typically these
+    // appear when someone opened the subscribe flow and abandoned it
+    // mid-way (matches the home "구독 현황" calendar, which also has
+    // nothing to render for them).
+    //
+    // CRITICAL: paid subscribers are ALWAYS kept in the roster even
+    // when they have zero dates selected, so the admin can follow up
+    // before the delivery window starts. Hiding them caused a real
+    // incident where a paid subscriber went unnoticed (no dates =
+    // no salad dispatched). See `SubscriberRow` for the paid + empty
+    // visual treatment.
+    if (paymentStatus !== "completed" && deliveryDates.length === 0) continue;
 
     const price = totalDeliveryDays * salads * pricePerSalad;
 
@@ -1420,7 +1429,7 @@ export async function getPeriodSubscribers(
       frequencyPerWeek: (sub.frequency_per_week as number | null) ?? 0,
       saladsPerDelivery: salads,
       totalDeliveryDays,
-      paymentStatus: (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending",
+      paymentStatus,
       paymentMethod: (sub.payment_method as string | null) ?? null,
       paidAt: (sub.paid_at as string | null) ?? null,
       price,

@@ -793,6 +793,17 @@ function SubscriberListSection({
     () => subscribers.filter((s) => s.paymentStatus === "completed").length,
     [subscribers]
   );
+  // Count paid subscribers who still owe at least one date selection.
+  // Surface this in the collapsed header so admins can spot follow-up
+  // work without having to expand the list — critical because a paid
+  // subscriber with no dates won't receive any salad.
+  const paidIncompleteCount = useMemo(
+    () =>
+      subscribers.filter(
+        (s) => s.paymentStatus === "completed" && s.remainingSlots > 0
+      ).length,
+    [subscribers]
+  );
 
   return (
     <Card>
@@ -808,6 +819,11 @@ function SubscriberListSection({
           <span className="truncate text-xs text-muted-foreground">
             총 {totalCount}명 · 결제 완료 {paidCount}명
           </span>
+          {paidIncompleteCount > 0 && (
+            <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
+              결제 후 미선택 {paidIncompleteCount}명
+            </span>
+          )}
         </div>
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
@@ -875,7 +891,18 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
         <span>선택 날짜</span>
         <span className="text-foreground">
           {subscriber.deliveryDates.length === 0 ? (
-            <span className="text-muted-foreground">선택된 날짜 없음</span>
+            // Empty-selection message is red when the subscriber has
+            // already paid (critical — no salad will ship) and muted
+            // when still pending (expected intermediate state).
+            <span
+              className={
+                isPaid
+                  ? "font-semibold text-red-600 dark:text-red-400"
+                  : "text-muted-foreground"
+              }
+            >
+              {isPaid ? "⚠ 선택된 날짜 없음" : "선택된 날짜 없음"}
+            </span>
           ) : (
             <span className="flex flex-wrap gap-1">
               {subscriber.deliveryDates.map((d) => (
@@ -889,8 +916,19 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
             </span>
           )}
           {subscriber.remainingSlots > 0 && (
-            <span className="mt-1 block text-[11px] text-amber-600 dark:text-amber-500">
-              아직 {subscriber.remainingSlots}일 더 선택할 수 있어요
+            // Upgrade to red + "필요합니다" for paid subscribers so the
+            // follow-up feels urgent; keep amber + softer copy for the
+            // still-pending flow where further picks are expected.
+            <span
+              className={`mt-1 block text-[11px] ${
+                isPaid
+                  ? "font-semibold text-red-600 dark:text-red-400"
+                  : "text-amber-600 dark:text-amber-500"
+              }`}
+            >
+              {isPaid
+                ? `아직 ${subscriber.remainingSlots}일 더 선택이 필요합니다`
+                : `아직 ${subscriber.remainingSlots}일 더 선택할 수 있어요`}
             </span>
           )}
         </span>
