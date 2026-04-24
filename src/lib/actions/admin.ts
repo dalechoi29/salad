@@ -549,6 +549,15 @@ export async function getVendorReport(
 
   const supabase = await createClient();
 
+  // Future months should only expose deliveries for subscribers whose
+  // payment has been marked completed — the vendor shouldn't receive an
+  // order for someone who applied but hasn't paid yet. For the current
+  // month (and past months) we keep the existing behavior, which matches
+  // the home '구독 현황' count and so avoids reintroducing the kind of
+  // mismatch we fixed earlier (e.g. April 2nd 17 vs 18).
+  const todayStr = formatDateISO(getKSTDate());
+  const isFutureMonth = startDate > todayStr;
+
   const { data: disabledProfiles } = await supabase
     .from("profiles")
     .select("id")
@@ -620,6 +629,7 @@ export async function getVendorReport(
   type SubRow = {
     id: string;
     salads_per_delivery: number | null;
+    payment_status: string | null;
     subscription_periods: {
       target_month: string;
       delivery_start: string | null;
@@ -632,7 +642,7 @@ export async function getVendorReport(
     const { data: subs } = await supabase
       .from("subscriptions")
       .select(
-        "id, salads_per_delivery, subscription_periods(target_month, delivery_start, delivery_end)"
+        "id, salads_per_delivery, payment_status, subscription_periods(target_month, delivery_start, delivery_end)"
       )
       .in("id", subIds);
     for (const s of (subs ?? []) as SubRow[]) {
@@ -656,6 +666,9 @@ export async function getVendorReport(
     const de = p.delivery_end.slice(0, 10);
     if (dateStr < ds || dateStr > de) return null;
     if (p.target_month !== targetMonthLabelFromDateStr(dateStr)) return null;
+    // For future months, only include confirmed (paid) subscriptions. For
+    // the current/past months, include all (matches home '구독 현황').
+    if (isFutureMonth && sub.payment_status !== "completed") return null;
     return sub.salads_per_delivery ?? 1;
   }
 
@@ -774,6 +787,18 @@ export async function getVendorReport(
             });
           }
         }
+      } else {
+        // No main menus assigned for this date yet (common for upcoming
+        // months the admin hasn't planned). Still emit the day with the
+        // subscribed count under a "메뉴 미배정" placeholder so the vendor
+        // can see expected deliveries. Once menus are assigned the
+        // placeholder disappears and the real titles replace it.
+        const placeholderKey = "__unassigned__";
+        menuMap.set(placeholderKey, {
+          menuTitle: "메뉴 미배정",
+          count: unselectedSalads,
+          pickerCounts: new Map(),
+        });
       }
     }
 
@@ -1054,6 +1079,379 @@ export async function getSubscribersForDate(
     realName: p.real_name || "이름 없음",
     saladsPerDelivery: userSaladsMap.get(p.id) ?? 1,
   }));
+}
+
+// ─── Date Delivery Details (inline drill-down for admin status page) ────
+
+export type DateDeliveryDetails = {
+  subscribers: { userId: string; realName: string; saladsPerDelivery: number }[];
+  menuBreakdown: {
+    menuTitle: string;
+    count: number;
+    pickers: { name: string; count: number }[];
+  }[];
+};
+
+/**
+ * For a given subscription period and delivery date, returns:
+ *   - the list of users scheduled for delivery that day, and
+ *   - a vendor-report-style menu breakdown (per menu: count and who picked it)
+ *
+ * The scope matches the home "구독 현황" calendar counts (includes all
+ * subscribers regardless of payment status), so the returned subscriber
+ * list and menu totals are consistent with the per-day tile counts.
+ *
+ * Gated on super_admin, the `subscription_status` permission, or the
+ * `vendor_report` permission — any of those roles already has legitimate
+ * reasons to see this detail view.
+ */
+export async function getDateDeliveryDetails(
+  periodId: string,
+  date: string
+): Promise<DateDeliveryDetails> {
+  const empty: DateDeliveryDetails = { subscribers: [], menuBreakdown: [] };
+  if (!periodId || !date) return empty;
+
+  const role = await getCallerRole();
+  if (!isAnyAdmin(role)) return empty;
+  if (!isSuperAdmin(role)) {
+    const [hasSub, hasVend] = await Promise.all([
+      hasPermission("subscription_status"),
+      hasPermission("vendor_report"),
+    ]);
+    if (!hasSub && !hasVend) return empty;
+  }
+
+  const admin = createAdminClient();
+
+  const { data: subs } = await admin
+    .from("subscriptions")
+    .select("id, user_id, salads_per_delivery")
+    .eq("period_id", periodId);
+  if (!subs?.length) return empty;
+
+  const subIds = subs.map((s: any) => s.id as string);
+  const userSaladsMap = new Map<string, number>();
+  for (const s of subs as any[]) {
+    userSaladsMap.set(s.user_id as string, (s.salads_per_delivery as number | null) ?? 1);
+  }
+
+  const [{ data: disabled }, { data: deliveryRows }] = await Promise.all([
+    admin.from("profiles").select("id").eq("status", "disabled"),
+    admin
+      .from("delivery_days")
+      .select("subscription_id, user_id, week_start, selected_days")
+      .in("subscription_id", subIds),
+  ]);
+
+  const disabledIds = new Set((disabled ?? []).map((p: any) => p.id as string));
+
+  // Figure out exactly which users are scheduled for this specific date.
+  const usersForDate = new Set<string>();
+  for (const row of deliveryRows ?? []) {
+    const userId = (row as any).user_id as string;
+    if (disabledIds.has(userId)) continue;
+    const weekStart = new Date(((row as any).week_start as string) + "T00:00:00");
+    const selected = ((row as any).selected_days as number[]) ?? [];
+    for (const day of selected) {
+      const d = new Date(weekStart);
+      d.setDate(weekStart.getDate() + (day - 1));
+      if (formatDateISO(d) === date) {
+        usersForDate.add(userId);
+        break;
+      }
+    }
+  }
+
+  if (usersForDate.size === 0) return empty;
+
+  const userIds = [...usersForDate];
+
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, real_name, nickname, email")
+    .in("id", userIds);
+
+  const nameByUserId = new Map<string, string>();
+  for (const p of (profiles ?? []) as any[]) {
+    nameByUserId.set(
+      p.id,
+      p.real_name || p.nickname || p.email?.split("@")[0] || "알수없음"
+    );
+  }
+
+  const subscribers = userIds
+    .map((uid) => ({
+      userId: uid,
+      realName: nameByUserId.get(uid) ?? "이름 없음",
+      saladsPerDelivery: userSaladsMap.get(uid) ?? 1,
+    }))
+    .sort((a, b) => a.realName.localeCompare(b.realName, "ko"));
+
+  // Fetch explicit menu picks and the admin-planned main menus for this day.
+  const [selectionsResult, assignmentsResult] = await Promise.all([
+    admin
+      .from("user_menu_selections")
+      .select(
+        "user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+      )
+      .eq("delivery_date", date)
+      .in("user_id", userIds),
+    admin
+      .from("daily_menu_assignments")
+      .select("menu_id, slot_type, menu:menus(id, title)")
+      .eq("slot_type", "main")
+      .eq("delivery_date", date),
+  ]);
+
+  type MenuAggregate = {
+    menuTitle: string;
+    count: number;
+    pickerCounts: Map<string, number>;
+  };
+  const menuMap = new Map<string, MenuAggregate>();
+
+  let selectedSalads = 0;
+  for (const sel of (selectionsResult.data ?? []) as any[]) {
+    const qty = (sel.quantity as number | null) ?? 1;
+    const menu = sel.daily_menu_assignment?.menu;
+    if (!menu) continue;
+    selectedSalads += qty;
+
+    const existing = menuMap.get(menu.id);
+    if (existing) {
+      existing.count += qty;
+      existing.pickerCounts.set(
+        sel.user_id,
+        (existing.pickerCounts.get(sel.user_id) ?? 0) + qty
+      );
+    } else {
+      const pickerCounts = new Map<string, number>();
+      pickerCounts.set(sel.user_id, qty);
+      menuMap.set(menu.id, {
+        menuTitle: menu.title,
+        count: qty,
+        pickerCounts,
+      });
+    }
+  }
+
+  // Distribute salads from users who haven't picked a menu yet across the
+  // admin-planned main menus. This mirrors the vendor-report logic so the
+  // admin sees consistent numbers between both pages. If no main menus
+  // have been planned, surface the total under a "메뉴 미배정" placeholder.
+  const totalSubscribed = subscribers.reduce(
+    (sum, s) => sum + s.saladsPerDelivery,
+    0
+  );
+  const unselected = Math.max(0, totalSubscribed - selectedSalads);
+
+  if (unselected > 0) {
+    const mainMenus = ((assignmentsResult.data ?? []) as any[])
+      .map((a) => a.menu as { id: string; title: string } | null)
+      .filter((m): m is { id: string; title: string } => !!m);
+
+    if (mainMenus.length > 0) {
+      const perMenu = Math.floor(unselected / mainMenus.length);
+      let remainder = unselected % mainMenus.length;
+      for (const m of mainMenus) {
+        const extra = remainder > 0 ? 1 : 0;
+        remainder--;
+        const add = perMenu + extra;
+        if (add === 0) continue;
+        const existing = menuMap.get(m.id);
+        if (existing) existing.count += add;
+        else
+          menuMap.set(m.id, {
+            menuTitle: m.title,
+            count: add,
+            pickerCounts: new Map(),
+          });
+      }
+    } else {
+      menuMap.set("__unassigned__", {
+        menuTitle: "메뉴 미배정",
+        count: unselected,
+        pickerCounts: new Map(),
+      });
+    }
+  }
+
+  const menuBreakdown = Array.from(menuMap.values())
+    .map((m) => ({
+      menuTitle: m.menuTitle,
+      count: m.count,
+      pickers: Array.from(m.pickerCounts.entries())
+        .map(([uid, cnt]) => ({
+          name: nameByUserId.get(uid) ?? "알수없음",
+          count: cnt,
+        }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return { subscribers, menuBreakdown };
+}
+
+// ─── Period Subscribers (full detail for admin status page) ──────────────
+
+export type PeriodSubscriber = {
+  subscriptionId: string;
+  userId: string;
+  realName: string;
+  frequencyPerWeek: number;
+  saladsPerDelivery: number;
+  totalDeliveryDays: number;
+  paymentStatus: "pending" | "completed" | "expired";
+  paymentMethod: string | null;
+  paidAt: string | null;
+  price: number;
+  deliveryDates: string[];
+  remainingSlots: number;
+};
+
+/**
+ * Returns the full detail for every subscriber of a given subscription
+ * period, intended for the admin subscription-status page. For each user it
+ * includes payment info, derived price (based on the period's
+ * `price_per_salad`), the list of selected delivery dates, and how many
+ * additional dates the user is still entitled to pick based on
+ * `total_delivery_days`.
+ *
+ * Gated behind the `subscription_status` permission so regular vendor-only
+ * admins can't call it. Disabled users are excluded to mirror
+ * `getSubscribersForDate` and the home "구독 현황" view.
+ */
+export async function getPeriodSubscribers(
+  periodId: string
+): Promise<PeriodSubscriber[]> {
+  if (!periodId) return [];
+
+  const role = await getCallerRole();
+  if (!isAnyAdmin(role)) return [];
+  if (!isSuperAdmin(role) && !(await hasPermission("subscription_status"))) {
+    return [];
+  }
+
+  const admin = createAdminClient();
+
+  const { data: period } = await admin
+    .from("subscription_periods")
+    .select("price_per_salad")
+    .eq("id", periodId)
+    .maybeSingle();
+  const pricePerSalad = (period?.price_per_salad as number | null) ?? 0;
+
+  const { data: subsRaw } = await admin
+    .from("subscriptions")
+    .select(
+      "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at"
+    )
+    .eq("period_id", periodId);
+
+  const subs = subsRaw ?? [];
+  if (subs.length === 0) return [];
+
+  const userIds = [...new Set(subs.map((s: any) => s.user_id as string))];
+  const subIds = subs.map((s: any) => s.id as string);
+
+  const [{ data: profiles }, { data: deliveryRows }] = await Promise.all([
+    admin
+      .from("profiles")
+      .select("id, real_name, status")
+      .in("id", userIds),
+    admin
+      .from("delivery_days")
+      .select("subscription_id, week_start, selected_days")
+      .in("subscription_id", subIds),
+  ]);
+
+  const profileMap = new Map<
+    string,
+    { realName: string; disabled: boolean }
+  >();
+  for (const p of profiles ?? []) {
+    profileMap.set(p.id as string, {
+      realName: (p.real_name as string) || "이름 없음",
+      disabled: (p.status as string) === "disabled",
+    });
+  }
+
+  // Aggregate selected delivery dates per subscription.
+  const datesBySub = new Map<string, Set<string>>();
+  for (const row of deliveryRows ?? []) {
+    const subId = row.subscription_id as string;
+    const weekStart = row.week_start as string;
+    const selected = (row.selected_days as number[]) ?? [];
+    if (!weekStart || selected.length === 0) continue;
+
+    const set = datesBySub.get(subId) ?? new Set<string>();
+    const base = new Date(weekStart + "T00:00:00");
+    for (const day of selected) {
+      const d = new Date(base);
+      d.setDate(base.getDate() + (day - 1));
+      set.add(formatDateISO(d));
+    }
+    datesBySub.set(subId, set);
+  }
+
+  const result: PeriodSubscriber[] = [];
+  for (const sub of subs) {
+    const profile = profileMap.get(sub.user_id as string);
+    if (!profile || profile.disabled) continue;
+
+    const salads = (sub.salads_per_delivery as number | null) ?? 1;
+    const totalDeliveryDays = (sub.total_delivery_days as number | null) ?? 0;
+    const deliveryDates = [...(datesBySub.get(sub.id as string) ?? [])].sort();
+
+    // Align with the home "구독 현황" calendar: only count someone as an
+    // actual subscriber for this period if they have at least one picked
+    // delivery date. Ghost rows (subscription created but dates never
+    // committed, or all dates removed) are excluded so both views show
+    // the same roster.
+    if (deliveryDates.length === 0) continue;
+
+    const price = totalDeliveryDays * salads * pricePerSalad;
+
+    result.push({
+      subscriptionId: sub.id as string,
+      userId: sub.user_id as string,
+      realName: profile.realName,
+      frequencyPerWeek: (sub.frequency_per_week as number | null) ?? 0,
+      saladsPerDelivery: salads,
+      totalDeliveryDays,
+      paymentStatus: (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending",
+      paymentMethod: (sub.payment_method as string | null) ?? null,
+      paidAt: (sub.paid_at as string | null) ?? null,
+      price,
+      deliveryDates,
+      remainingSlots: Math.max(0, totalDeliveryDays - deliveryDates.length),
+    });
+  }
+
+  // Ordering for the admin subscriber list:
+  //   1. Primary — most salads ordered first, least last. "Salads ordered"
+  //      is totalDeliveryDays × saladsPerDelivery, which matches the
+  //      per-subscriber price and is what the admin usually scans for.
+  //   2. Secondary — subscribers who picked the same delivery-day pattern
+  //      are grouped adjacent, so the admin can see at a glance who shares
+  //      the same schedule (e.g. two people both on Mon/Wed/Fri land next
+  //      to each other). We compare a canonical signature built from the
+  //      already-sorted deliveryDates array.
+  //   3. Tertiary — alphabetical by name for a stable, readable order
+  //      within full ties.
+  result.sort((a, b) => {
+    const aTotal = a.totalDeliveryDays * a.saladsPerDelivery;
+    const bTotal = b.totalDeliveryDays * b.saladsPerDelivery;
+    if (aTotal !== bTotal) return bTotal - aTotal;
+
+    const aSig = a.deliveryDates.join(",");
+    const bSig = b.deliveryDates.join(",");
+    if (aSig !== bSig) return aSig.localeCompare(bSig);
+
+    return a.realName.localeCompare(b.realName, "ko");
+  });
+  return result;
 }
 
 // ─── Company Users (same email domain) ──────────────────────

@@ -289,6 +289,7 @@ export async function saveDeliveryDays(
 
   revalidatePath("/delivery");
   revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -366,5 +367,6 @@ export async function bulkSaveDeliveryDays(
 
   revalidatePath("/delivery");
   revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }

@@ -74,6 +74,7 @@ export async function createSubscriptionPeriod(
   if (error) return { error: error.message };
 
   revalidatePath("/admin/subscriptions");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -91,6 +92,7 @@ export async function updateSubscriptionPeriod(
   if (error) return { error: error.message };
 
   revalidatePath("/admin/subscriptions");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -107,6 +109,7 @@ export async function deleteSubscriptionPeriod(
   if (error) return { error: error.message };
 
   revalidatePath("/admin/subscriptions");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -136,6 +139,7 @@ export async function cancelSubscription(
   revalidatePath("/subscription");
   revalidatePath("/delivery");
   revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -263,6 +267,7 @@ export async function createOrUpdateSubscription(
     revalidatePath("/subscription");
     revalidatePath("/delivery");
     revalidatePath("/");
+    revalidatePath("/admin/subscription-status");
     return { success: true, subscriptionId: existing.id };
   } else {
     const { data: inserted, error } = await supabase
@@ -283,6 +288,7 @@ export async function createOrUpdateSubscription(
     revalidatePath("/subscription");
     revalidatePath("/delivery");
     revalidatePath("/");
+    revalidatePath("/admin/subscription-status");
     return { success: true, subscriptionId: inserted.id };
   }
 }
@@ -296,12 +302,27 @@ export async function updatePaymentAndMarkPaid(
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
+  // Preserve the original paid_at if this subscription was already marked
+  // completed (defensive: normally this action only fires on the first
+  // transition from pending → completed).
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("paid_at")
+    .eq("id", subscriptionId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const updatePayload: Record<string, unknown> = {
+    payment_method: paymentMethod,
+    payment_status: "completed",
+  };
+  if (!currentSub?.paid_at) {
+    updatePayload.paid_at = new Date().toISOString();
+  }
+
   const { error } = await supabase
     .from("subscriptions")
-    .update({
-      payment_method: paymentMethod,
-      payment_status: "completed",
-    })
+    .update(updatePayload)
     .eq("id", subscriptionId)
     .eq("user_id", user.id);
 
@@ -310,6 +331,7 @@ export async function updatePaymentAndMarkPaid(
   revalidatePath("/subscription");
   revalidatePath("/delivery");
   revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -333,6 +355,7 @@ export async function updatePaymentMethod(
   revalidatePath("/subscription");
   revalidatePath("/delivery");
   revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -355,12 +378,35 @@ export async function adminUpdateSubscriptionPayment(
     return { error: "권한이 없습니다" };
   }
 
+  // Keep paid_at in sync with payment_status transitions so downstream
+  // reporting (admin subscription-status list) shows when the admin
+  // confirmed the payment. We only stamp paid_at on an actual transition
+  // from 'pending' → 'completed' so resaving an already-paid subscription
+  // (e.g. changing the payment method) doesn't overwrite the original
+  // timestamp. Reverting to 'pending' clears the timestamp.
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("payment_status, paid_at")
+    .eq("id", subscriptionId)
+    .maybeSingle();
+
+  const updatePayload: Record<string, unknown> = {
+    payment_method: paymentMethod,
+    payment_status: paymentStatus,
+  };
+
+  if (paymentStatus === "completed") {
+    const wasAlreadyCompleted = currentSub?.payment_status === "completed";
+    if (!wasAlreadyCompleted || !currentSub?.paid_at) {
+      updatePayload.paid_at = new Date().toISOString();
+    }
+  } else {
+    updatePayload.paid_at = null;
+  }
+
   const { error } = await supabase
     .from("subscriptions")
-    .update({
-      payment_method: paymentMethod,
-      payment_status: paymentStatus,
-    })
+    .update(updatePayload)
     .eq("id", subscriptionId);
 
   if (error) return { error: error.message };

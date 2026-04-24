@@ -9,6 +9,7 @@ import {
   User,
   Shield,
   FileSpreadsheet,
+  CalendarCheck,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, usePathname } from "@/i18n/navigation";
@@ -24,7 +25,8 @@ type NavItem = {
     | "mySalad"
     | "community"
     | "myPage"
-    | "report";
+    | "report"
+    | "subscriptionStatus";
 };
 
 const baseNavItems: NavItem[] = [
@@ -42,16 +44,34 @@ export function DesktopSidebar() {
   const { user, permissions } = useUser();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
+  // See BottomNav for the reasoning: utility admins whose primary workflow
+  // is tracking the subscription status get the 구독 현황 tab in place of
+  // the regular user "My Salad" tab.
+  const isSubscriptionStatusAdmin =
+    user?.role === "admin" && permissions.includes("subscription_status");
+
+  const swappedBase: NavItem[] = isSubscriptionStatusAdmin
+    ? baseNavItems.map((item) =>
+        item.href === "/pickup"
+          ? {
+              href: "/admin/subscription-status",
+              icon: CalendarCheck,
+              labelKey: "subscriptionStatus",
+            }
+          : item
+      )
+    : baseNavItems;
+
   const navItems: NavItem[] = permissions.includes("vendor_report")
     ? [
-        ...baseNavItems,
+        ...swappedBase,
         {
           href: "/admin/reports",
           icon: FileSpreadsheet,
           labelKey: "report",
         },
       ]
-    : baseNavItems;
+    : swappedBase;
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 border-r bg-background md:block">

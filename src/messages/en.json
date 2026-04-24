@@ -25,7 +25,8 @@
     "community": "Bamboo Forest",
     "myPage": "My Space",
     "admin": "Admin",
-    "report": "Report"
+    "report": "Report",
+    "subscriptionStatus": "Subscriptions"
   },
   "auth": {
     "login": "Login",

@@ -174,6 +174,10 @@ export async function assignMenuToDate(
 
   revalidatePath("/admin/menus");
   revalidatePath("/menu");
+  // Menu planning changes how unselected salads are attributed in the
+  // admin per-date drill-down and in the vendor report.
+  revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/reports");
   return { success: true };
 }
 
@@ -191,6 +195,8 @@ export async function removeMenuFromDate(
 
   revalidatePath("/admin/menus");
   revalidatePath("/menu");
+  revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/reports");
   return { success: true };
 }
 
@@ -227,6 +233,15 @@ export async function updateMenuQuantity(
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
+  // A user picking / updating / clearing a menu for a date changes the
+  // vendor report totals and the admin subscription-status drill-down for
+  // that date. Invalidate both after any successful mutation below.
+  const revalidateRelated = () => {
+    revalidatePath("/menu");
+    revalidatePath("/admin/subscription-status");
+    revalidatePath("/admin/reports");
+  };
+
   if (quantity <= 0) {
     const { error } = await supabase
       .from("user_menu_selections")
@@ -235,6 +250,7 @@ export async function updateMenuQuantity(
       .eq("daily_menu_id", dailyMenuId);
 
     if (error) return { error: error.message };
+    revalidateRelated();
     return { success: true };
   }
 
@@ -274,6 +290,7 @@ export async function updateMenuQuantity(
     if (error) return { error: error.message };
   }
 
+  revalidateRelated();
   return { success: true };
 }
 

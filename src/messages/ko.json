@@ -25,7 +25,8 @@
     "community": "대나무숲",
     "myPage": "내 공간",
     "admin": "관리자",
-    "report": "리포트"
+    "report": "리포트",
+    "subscriptionStatus": "구독 현황"
   },
   "auth": {
     "login": "로그인",
