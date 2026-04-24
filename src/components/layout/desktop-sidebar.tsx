@@ -50,8 +50,22 @@ export function DesktopSidebar() {
   const isSubscriptionStatusAdmin =
     user?.role === "admin" && permissions.includes("subscription_status");
 
+  // "Store manager" admins — role=admin with subscription_status and/or
+  // vendor_report permission — have an ops-only workflow. Hide the
+  // user-facing 메뉴 / 대나무숲 / 마이페이지 tabs that add noise for
+  // them. Super admins and regular members keep the full nav.
+  const isStoreManagerAdmin =
+    user?.role === "admin" &&
+    (permissions.includes("subscription_status") ||
+      permissions.includes("vendor_report"));
+
+  const HIDDEN_FOR_STORE_MANAGER = new Set(["/menu", "/community", "/my"]);
+  const trimmedBase: NavItem[] = isStoreManagerAdmin
+    ? baseNavItems.filter((item) => !HIDDEN_FOR_STORE_MANAGER.has(item.href))
+    : baseNavItems;
+
   const swappedBase: NavItem[] = isSubscriptionStatusAdmin
-    ? baseNavItems.map((item) =>
+    ? trimmedBase.map((item) =>
         item.href === "/pickup"
           ? {
               href: "/admin/subscription-status",
@@ -60,7 +74,7 @@ export function DesktopSidebar() {
             }
           : item
       )
-    : baseNavItems;
+    : trimmedBase;
 
   const navItems: NavItem[] = permissions.includes("vendor_report")
     ? [
