@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Loader2,
   FileSpreadsheet,
   Copy,
   MessageSquareText,
@@ -17,7 +16,6 @@ import {
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import {
-  getMenuSelectionCutoff,
   getWeeklyMenuDeadlines,
   getVendorReport,
   type VendorReportRow,
@@ -27,6 +25,7 @@ import {
   getMonthRange,
   isSelectionClosed,
 } from "@/lib/utils";
+import { VendorReportContentSkeleton } from "./vendor-report-skeleton";
 
 const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -52,33 +51,41 @@ function formatWeekRange(mondayISO: string): string {
   return `${mm}/${md} ~ ${sm}/${sd}`;
 }
 
-export function VendorReportView() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [rows, setRows] = useState<VendorReportRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+interface VendorReportViewProps {
+  initialYear: number;
+  initialMonth: number;
+  initialRows: VendorReportRow[];
+  initialCutoff: { day: number; time: string };
+  initialDeadlineOverrides: Record<string, string>;
+}
+
+export function VendorReportView({
+  initialYear,
+  initialMonth,
+  initialRows,
+  initialCutoff,
+  initialDeadlineOverrides,
+}: VendorReportViewProps) {
+  const [year, setYear] = useState(initialYear);
+  const [month, setMonth] = useState(initialMonth);
+  const [rows, setRows] = useState<VendorReportRow[]>(initialRows);
+  const [isLoading, setIsLoading] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
-  const [cutoff, setCutoff] = useState<{ day: number; time: string }>({
-    day: 4,
-    time: "23:59",
-  });
-  const [deadlineOverrides, setDeadlineOverrides] = useState<Record<string, string>>({});
-
-  // Cutoff is global admin config; fetch once on mount.
-  useEffect(() => {
-    let cancelled = false;
-    getMenuSelectionCutoff().then((c) => {
-      if (!cancelled) setCutoff(c);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [cutoff, setCutoff] = useState(initialCutoff);
+  const [deadlineOverrides, setDeadlineOverrides] = useState(
+    initialDeadlineOverrides
+  );
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
+    async function run() {
+      if (year === initialYear && month === initialMonth) {
+        setRows(initialRows);
+        setDeadlineOverrides(initialDeadlineOverrides);
+        setCutoff(initialCutoff);
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       const { start, end } = getMonthRange(year, month);
       const [data, deadlines] = await Promise.all([
@@ -93,11 +100,19 @@ export function VendorReportView() {
         setIsLoading(false);
       }
     }
-    load();
+    run();
     return () => {
       cancelled = true;
     };
-  }, [year, month]);
+  }, [
+    year,
+    month,
+    initialYear,
+    initialMonth,
+    initialRows,
+    initialCutoff,
+    initialDeadlineOverrides,
+  ]);
 
   // Derive a locked/open flag per row so each render doesn't recompute per
   // cell. Recomputed only when rows or cutoff change.
@@ -256,9 +271,7 @@ export function VendorReportView() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
+        <VendorReportContentSkeleton />
       ) : rows.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">

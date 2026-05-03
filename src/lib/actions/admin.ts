@@ -622,38 +622,38 @@ export async function getVendorReport(
   const todayStr = formatDateISO(getKSTDate());
   const isFutureMonth = startDate > todayStr;
 
-  const { data: disabledProfiles } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("status", "disabled");
-  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
-
   // Include week rows that start just before the range so Mon–Fri dates inside the range are not dropped.
   const weekStartLower = formatDateISO(
     new Date(new Date(startDate + "T00:00:00").getTime() - 7 * 86400000)
   );
 
-  const [selectionsResult, deliveryDaysResult, assignmentsResult] = await Promise.all([
-    supabase
-      .from("user_menu_selections")
-      .select(
-        "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
-      )
-      .gte("delivery_date", startDate)
-      .lte("delivery_date", endDate)
-      .order("delivery_date"),
-    supabase
-      .from("delivery_days")
-      .select("user_id, week_start, selected_days, subscription_id")
-      .gte("week_start", weekStartLower)
-      .lte("week_start", endDate),
-    supabase
-      .from("daily_menu_assignments")
-      .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
-      .eq("slot_type", "main")
-      .gte("delivery_date", startDate)
-      .lte("delivery_date", endDate),
-  ]);
+  const [disabledResult, selectionsResult, deliveryDaysResult, assignmentsResult] =
+    await Promise.all([
+      supabase.from("profiles").select("id").eq("status", "disabled"),
+      supabase
+        .from("user_menu_selections")
+        .select(
+          "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+        )
+        .gte("delivery_date", startDate)
+        .lte("delivery_date", endDate)
+        .order("delivery_date"),
+      supabase
+        .from("delivery_days")
+        .select("user_id, week_start, selected_days, subscription_id")
+        .gte("week_start", weekStartLower)
+        .lte("week_start", endDate),
+      supabase
+        .from("daily_menu_assignments")
+        .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
+        .eq("slot_type", "main")
+        .gte("delivery_date", startDate)
+        .lte("delivery_date", endDate),
+    ]);
+
+  const disabledUserIds = new Set(
+    (disabledResult.data ?? []).map((p: any) => p.id)
+  );
 
   // Fetch real names for any users appearing in selections, so we can show
   // "who picked which menu" compactly in the report.
@@ -1357,7 +1357,7 @@ export async function getDateDeliveryDetails(
   return { subscribers, menuBreakdown };
 }
 
-// ─── Period Subscribers (full detail for admin status page) ──────────────
+// ─── Period Subscribers types (used by status bundle + roster action) ───
 
 export type PeriodSubscriber = {
   subscriptionId: string;
@@ -1379,78 +1379,110 @@ type CarryoverUsageRow = {
   carryover_delivery_days: number | null;
 };
 
+// ─── Period status bundle (admin subscription-status page) ─────────────
+
+export type PeriodStatusBundle = {
+  dayCounts: Record<string, number>;
+  subscribers: PeriodSubscriber[];
+};
+
 /**
- * Returns the full detail for every subscriber of a given subscription
- * period, intended for the admin subscription-status page. For each user it
- * includes payment info, derived price (based on the period's
- * `price_per_salad`), the list of selected delivery dates, and how many
- * additional dates the user is still entitled to pick based on
- * `total_delivery_days`.
+ * Loads per-day salad counts and the full subscriber roster for one period in
+ * a single pass (shared Supabase round trips). Used by the admin
+ * subscription-status page to avoid duplicating subscriptions + delivery_days
+ * queries across {@link getSubscriptionDayCounts} and
+ * {@link getPeriodSubscribers}.
  *
- * Gated behind the `subscription_status` permission so regular vendor-only
- * admins can't call it. Disabled users are excluded to mirror
- * `getSubscribersForDate` and the home "구독 현황" view.
+ * Same permission gate as {@link getPeriodSubscribers}.
  */
-export async function getPeriodSubscribers(
+export async function getPeriodStatusBundle(
   periodId: string
-): Promise<PeriodSubscriber[]> {
-  if (!periodId) return [];
+): Promise<PeriodStatusBundle> {
+  const empty: PeriodStatusBundle = { dayCounts: {}, subscribers: [] };
+  if (!periodId) return empty;
 
   const role = await getCallerRole();
-  if (!isAnyAdmin(role)) return [];
+  if (!isAnyAdmin(role)) return empty;
   if (!isSuperAdmin(role) && !(await hasPermission("subscription_status"))) {
-    return [];
+    return empty;
   }
 
   const admin = createAdminClient();
 
-  const { data: period } = await admin
-    .from("subscription_periods")
-    .select("price_per_salad")
-    .eq("id", periodId)
-    .maybeSingle();
+  const [{ data: period }, { data: subsRaw }] = await Promise.all([
+    admin
+      .from("subscription_periods")
+      .select("price_per_salad")
+      .eq("id", periodId)
+      .maybeSingle(),
+    admin
+      .from("subscriptions")
+      .select(
+        "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at"
+      )
+      .eq("period_id", periodId),
+  ]);
+
   const pricePerSalad = (period?.price_per_salad as number | null) ?? 0;
-
-  const { data: subsRaw } = await admin
-    .from("subscriptions")
-    .select(
-      "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at"
-    )
-    .eq("period_id", periodId);
-
   const subs = subsRaw ?? [];
-  if (subs.length === 0) return [];
+  if (subs.length === 0) return empty;
 
   const userIds = [...new Set(subs.map((s: any) => s.user_id as string))];
   const subIds = subs.map((s: any) => s.id as string);
+  const saladsBySubId = new Map<string, number>();
+  for (const s of subs) {
+    saladsBySubId.set(s.id as string, (s.salads_per_delivery as number | null) ?? 1);
+  }
 
-  const [{ data: profiles }, { data: deliveryRows }, { data: carryoverRows }] = await Promise.all([
-    admin
-      .from("profiles")
-      .select("id, real_name, status")
-      .in("id", userIds),
-    admin
-      .from("delivery_days")
-      .select("subscription_id, week_start, selected_days")
-      .in("subscription_id", subIds),
-    admin
-      .from("subscriptions")
-      .select("carryover_from_subscription_id, carryover_delivery_days")
-      .in("carryover_from_subscription_id", subIds),
-  ]);
+  const [{ data: profiles }, { data: deliveryRows }, { data: carryoverRows }] =
+    await Promise.all([
+      admin
+        .from("profiles")
+        .select("id, real_name, status")
+        .in("id", userIds),
+      admin
+        .from("delivery_days")
+        .select("subscription_id, week_start, selected_days, user_id")
+        .in("subscription_id", subIds),
+      admin
+        .from("subscriptions")
+        .select("carryover_from_subscription_id, carryover_delivery_days")
+        .in("carryover_from_subscription_id", subIds),
+    ]);
 
   const profileMap = new Map<
     string,
     { realName: string; disabled: boolean }
   >();
+  const disabledUserIds = new Set<string>();
   for (const p of profiles ?? []) {
-    profileMap.set(p.id as string, {
+    const id = p.id as string;
+    const disabled = (p.status as string) === "disabled";
+    profileMap.set(id, {
       realName: (p.real_name as string) || "이름 없음",
-      disabled: (p.status as string) === "disabled",
+      disabled,
     });
+    if (disabled) disabledUserIds.add(id);
   }
 
-  // Aggregate selected delivery dates per subscription.
+  const dateCounts: Record<string, number> = {};
+  for (const row of deliveryRows ?? []) {
+    const userId = (row as any).user_id as string;
+    if (disabledUserIds.has(userId)) continue;
+    const subId = (row as any).subscription_id as string;
+    const saladsPerDelivery = saladsBySubId.get(subId) ?? 1;
+    const weekStart = (row as any).week_start as string;
+    const selected = ((row as any).selected_days as number[]) ?? [];
+    if (!weekStart || selected.length === 0) continue;
+    const base = new Date(weekStart + "T00:00:00");
+    for (const day of selected) {
+      const d = new Date(base);
+      d.setDate(base.getDate() + (day - 1));
+      const dateStr = formatDateISO(d);
+      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
+    }
+  }
+
   const datesBySub = new Map<string, Set<string>>();
   for (const row of deliveryRows ?? []) {
     const subId = row.subscription_id as string;
@@ -1491,29 +1523,10 @@ export async function getPeriodSubscribers(
     const paymentStatus =
       (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending";
 
-    // Hide TRUE ghost rows only — subscriptions that were created but
-    // the user never paid AND never committed any dates. Typically these
-    // appear when someone opened the subscribe flow and abandoned it
-    // mid-way (matches the home "구독 현황" calendar, which also has
-    // nothing to render for them).
-    //
-    // CRITICAL: paid subscribers are ALWAYS kept in the roster even
-    // when they have zero dates selected, so the admin can follow up
-    // before the delivery window starts. Hiding them caused a real
-    // incident where a paid subscriber went unnoticed (no dates =
-    // no salad dispatched). See `SubscriberRow` for the paid + empty
-    // visual treatment.
+    // Hide TRUE ghost rows only — paid subscribers stay even with zero dates
+    // (see getPeriodSubscribers doc / SubscriberRow).
     if (paymentStatus !== "completed" && deliveryDates.length === 0) continue;
 
-    // Some subscription rows end up with total_delivery_days = 0 / null
-    // (e.g. when the user subscribes with a frequency but never commits
-    // any dates, yet still pays). In that case the raw field is useless
-    // for pricing and for the admin's "remaining picks" follow-up. Fall
-    // back to `frequency × 4` (the same 4-weeks-per-month convention
-    // used by getDeliverySummary) so the admin sees the price the
-    // subscriber was actually charged for and the correct remaining
-    // slot count. Free-select subscribers (frequency=0) with no stored
-    // total stay at 0 — we genuinely don't know their intended count.
     const totalDeliveryDays = storedTotalDays || frequency * 4;
     const price = totalDeliveryDays * salads * pricePerSalad;
 
@@ -1538,17 +1551,6 @@ export async function getPeriodSubscribers(
     });
   }
 
-  // Ordering for the admin subscriber list:
-  //   1. Primary — most salads ordered first, least last. "Salads ordered"
-  //      is totalDeliveryDays × saladsPerDelivery, which matches the
-  //      per-subscriber price and is what the admin usually scans for.
-  //   2. Secondary — subscribers who picked the same delivery-day pattern
-  //      are grouped adjacent, so the admin can see at a glance who shares
-  //      the same schedule (e.g. two people both on Mon/Wed/Fri land next
-  //      to each other). We compare a canonical signature built from the
-  //      already-sorted deliveryDates array.
-  //   3. Tertiary — alphabetical by name for a stable, readable order
-  //      within full ties.
   result.sort((a, b) => {
     const aTotal = a.totalDeliveryDays * a.saladsPerDelivery;
     const bTotal = b.totalDeliveryDays * b.saladsPerDelivery;
@@ -1560,7 +1562,27 @@ export async function getPeriodSubscribers(
 
     return a.realName.localeCompare(b.realName, "ko");
   });
-  return result;
+
+  return { dayCounts: dateCounts, subscribers: result };
+}
+
+/**
+ * Returns the full detail for every subscriber of a given subscription
+ * period, intended for the admin subscription-status page. For each user it
+ * includes payment info, derived price (based on the period's
+ * `price_per_salad`), the list of selected delivery dates, and how many
+ * additional dates the user is still entitled to pick based on
+ * `total_delivery_days`.
+ *
+ * Gated behind the `subscription_status` permission so regular vendor-only
+ * admins can't call it. Disabled users are excluded to mirror
+ * `getSubscribersForDate` and the home "구독 현황" view.
+ */
+export async function getPeriodSubscribers(
+  periodId: string
+): Promise<PeriodSubscriber[]> {
+  const { subscribers } = await getPeriodStatusBundle(periodId);
+  return subscribers;
 }
 
 // ─── Company Users (same email domain) ──────────────────────

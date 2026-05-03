@@ -5,21 +5,24 @@ import { getStoreClosures } from "@/lib/actions/store-closure";
 import {
   getCallerAdminRole,
   getMyPermissions,
-  getPeriodSubscribers,
-  getSubscriptionDayCounts,
+  getPeriodStatusBundle,
+  type PeriodStatusBundle,
 } from "@/lib/actions/admin";
 import { getKSTDate } from "@/lib/utils";
 import { redirect } from "next/navigation";
 import { SubscriptionStatusView } from "./subscription-status-view";
+
+const EMPTY_BUNDLE: PeriodStatusBundle = { dayCounts: {}, subscribers: [] };
 
 export default async function AdminSubscriptionStatusPage() {
   // Gate the page on the `subscription_status` permission so regular
   // admins without that capability can't land here via a direct URL. The
   // admin landing page already hides the link for them, but the explicit
   // redirect here mirrors the pattern used by /admin/users.
-  const [adminRole, permissions] = await Promise.all([
+  const [adminRole, permissions, periods] = await Promise.all([
     getCallerAdminRole(),
     getMyPermissions(),
+    getSubscriptionPeriods(),
   ]);
 
   if (
@@ -29,7 +32,6 @@ export default async function AdminSubscriptionStatusPage() {
     redirect("/admin");
   }
 
-  const periods = await getSubscriptionPeriods();
   const now = getKSTDate();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
@@ -42,24 +44,26 @@ export default async function AdminSubscriptionStatusPage() {
   const currentPeriod = periods.find((p) => p.target_month === currentMonthStr);
   const nextPeriod = periods.find((p) => p.target_month === nextMonthStr);
 
-  // Fetching the subscriber lists on the server lets us render the total
-  // and paid counts in the collapsed section header on first paint,
-  // without waiting for a client-side fetch triggered by expansion.
-  const [
-    currentCounts,
-    nextCounts,
-    holidays,
-    storeClosures,
-    currentSubscribers,
-    nextSubscribers,
-  ] = await Promise.all([
-    currentPeriod ? getSubscriptionDayCounts(currentPeriod.id) : Promise.resolve({}),
-    nextPeriod ? getSubscriptionDayCounts(nextPeriod.id) : Promise.resolve({}),
-    getHolidays(),
-    getStoreClosures(),
-    currentPeriod ? getPeriodSubscribers(currentPeriod.id) : Promise.resolve([]),
-    nextPeriod ? getPeriodSubscribers(nextPeriod.id) : Promise.resolve([]),
-  ]);
+  const yearsForBlocked = [...new Set([currentYear, nextYear])];
+
+  // One combined fetch per period (counts + roster share subscriptions /
+  // delivery_days). Holidays and closures are scoped to the calendar year(s)
+  // that can appear on the two tabs instead of loading all history.
+  const [currentBundle, nextBundle, holidaysByYear, closuresByYear] =
+    await Promise.all([
+      currentPeriod
+        ? getPeriodStatusBundle(currentPeriod.id)
+        : Promise.resolve(EMPTY_BUNDLE),
+      nextPeriod
+        ? getPeriodStatusBundle(nextPeriod.id)
+        : Promise.resolve(EMPTY_BUNDLE),
+      Promise.all(yearsForBlocked.map((y) => getHolidays(y))),
+      Promise.all(yearsForBlocked.map((y) => getStoreClosures(y))),
+    ]);
+
+  const holidays = holidaysByYear.flat();
+  const storeClosures = closuresByYear.flat();
+
   const blockedDays = [
     ...holidays,
     ...storeClosures.map((closure) => ({
@@ -92,15 +96,15 @@ export default async function AdminSubscriptionStatusPage() {
       <SubscriptionStatusView
         currentPeriod={currentPeriod ?? null}
         nextPeriod={nextPeriod ?? null}
-        currentCounts={currentCounts}
-        nextCounts={nextCounts}
+        currentCounts={currentBundle.dayCounts}
+        nextCounts={nextBundle.dayCounts}
         holidays={blockedDays}
         showSubscriberList
         showDateDetailPanel
         autoOpenFirstDataDate
         defaultTabIndex={defaultTabIndex}
-        currentSubscribers={currentSubscribers}
-        nextSubscribers={nextSubscribers}
+        currentSubscribers={currentBundle.subscribers}
+        nextSubscribers={nextBundle.subscribers}
       />
     </Suspense>
   );
