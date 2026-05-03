@@ -39,8 +39,11 @@ export interface Subscription {
   frequency_per_week: number;
   salads_per_delivery: number;
   total_delivery_days: number | null;
+  carryover_delivery_days?: number;
+  carryover_from_subscription_id?: string | null;
   payment_method: PaymentMethod | null;
   payment_status: PaymentStatus;
+  closure_reselection_required?: boolean;
   created_at: string;
 }
 
@@ -104,7 +107,16 @@ export interface Holiday {
   id: string;
   holiday_date: string;
   name: string;
-  source: "manual" | "api";
+  source: "manual" | "api" | "store_closure";
+}
+
+export interface StoreClosure {
+  id: string;
+  closure_date: string;
+  reason: string;
+  memo: string;
+  created_by: string | null;
+  created_at: string;
 }
 
 export interface Pickup {

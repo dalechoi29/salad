@@ -233,6 +233,70 @@ export async function updateAdminSetting(
   return { success: true };
 }
 
+export type WeeklyMenuDeadline = {
+  id: string;
+  week_start: string;
+  deadline_at: string;
+};
+
+export async function getWeeklyMenuDeadlines(
+  startDate: string,
+  endDate: string
+): Promise<WeeklyMenuDeadline[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("menu_selection_deadlines")
+    .select("id, week_start, deadline_at")
+    .gte("week_start", startDate)
+    .lte("week_start", endDate)
+    .order("week_start");
+
+  return (data as WeeklyMenuDeadline[]) ?? [];
+}
+
+export async function upsertWeeklyMenuDeadline(
+  weekStart: string,
+  deadlineDate: string,
+  deadlineTime: string
+): Promise<ActionResult> {
+  if (!(await hasPermission("settings"))) return { error: "권한이 없습니다" };
+
+  const supabase = await createClient();
+  const deadlineAt = `${deadlineDate}T${deadlineTime}:00+09:00`;
+  const { error } = await supabase.from("menu_selection_deadlines").upsert(
+    {
+      week_start: weekStart,
+      deadline_at: deadlineAt,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "week_start" }
+  );
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/menu");
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/reports");
+  return { success: true };
+}
+
+export async function deleteWeeklyMenuDeadline(id: string): Promise<ActionResult> {
+  if (!(await hasPermission("settings"))) return { error: "권한이 없습니다" };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("menu_selection_deadlines")
+    .delete()
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/menu");
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/reports");
+  return { success: true };
+}
+
 export async function approveUser(
   userId: string,
   password: string
@@ -1310,6 +1374,11 @@ export type PeriodSubscriber = {
   remainingSlots: number;
 };
 
+type CarryoverUsageRow = {
+  carryover_from_subscription_id: string | null;
+  carryover_delivery_days: number | null;
+};
+
 /**
  * Returns the full detail for every subscriber of a given subscription
  * period, intended for the admin subscription-status page. For each user it
@@ -1355,7 +1424,7 @@ export async function getPeriodSubscribers(
   const userIds = [...new Set(subs.map((s: any) => s.user_id as string))];
   const subIds = subs.map((s: any) => s.id as string);
 
-  const [{ data: profiles }, { data: deliveryRows }] = await Promise.all([
+  const [{ data: profiles }, { data: deliveryRows }, { data: carryoverRows }] = await Promise.all([
     admin
       .from("profiles")
       .select("id, real_name, status")
@@ -1364,6 +1433,10 @@ export async function getPeriodSubscribers(
       .from("delivery_days")
       .select("subscription_id, week_start, selected_days")
       .in("subscription_id", subIds),
+    admin
+      .from("subscriptions")
+      .select("carryover_from_subscription_id, carryover_delivery_days")
+      .in("carryover_from_subscription_id", subIds),
   ]);
 
   const profileMap = new Map<
@@ -1393,6 +1466,17 @@ export async function getPeriodSubscribers(
       set.add(formatDateISO(d));
     }
     datesBySub.set(subId, set);
+  }
+
+  const usedCarryoverBySource = new Map<string, number>();
+  for (const row of (carryoverRows ?? []) as CarryoverUsageRow[]) {
+    const sourceId = row.carryover_from_subscription_id as string | null;
+    if (!sourceId) continue;
+    usedCarryoverBySource.set(
+      sourceId,
+      (usedCarryoverBySource.get(sourceId) ?? 0) +
+        (row.carryover_delivery_days ?? 0)
+    );
   }
 
   const result: PeriodSubscriber[] = [];
@@ -1445,7 +1529,12 @@ export async function getPeriodSubscribers(
       paidAt: (sub.paid_at as string | null) ?? null,
       price,
       deliveryDates,
-      remainingSlots: Math.max(0, totalDeliveryDays - deliveryDates.length),
+      remainingSlots: Math.max(
+        0,
+        totalDeliveryDays -
+          deliveryDates.length -
+          (usedCarryoverBySource.get(sub.id as string) ?? 0)
+      ),
     });
   }
 

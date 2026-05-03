@@ -4,6 +4,7 @@ import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/ser
 import { revalidatePath } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isSelectionClosed } from "@/lib/utils";
 
 // Remove any user_menu_selections whose delivery_date is no longer in the user's
 // saved delivery_days for this subscription. Without this, if a user moves their
@@ -65,6 +66,86 @@ function expandDeliveryDaysToDateStrings(
   return out;
 }
 
+function expandWeekSelectionToDateStrings(
+  weekStart: string,
+  selectedDays: number[]
+): string[] {
+  return expandDeliveryDaysToDateStrings([
+    { week_start: weekStart, selected_days: selectedDays },
+  ]);
+}
+
+async function getBlockedDateSet(
+  client: SupabaseClient,
+  dates: string[]
+): Promise<Set<string>> {
+  if (dates.length === 0) return new Set();
+  const sorted = [...new Set(dates)].sort();
+  const start = sorted[0];
+  const end = sorted[sorted.length - 1];
+
+  const [{ data: holidays }, { data: closures }] = await Promise.all([
+    client
+      .from("holidays")
+      .select("holiday_date")
+      .gte("holiday_date", start)
+      .lte("holiday_date", end),
+    client
+      .from("store_closures")
+      .select("closure_date")
+      .gte("closure_date", start)
+      .lte("closure_date", end),
+  ]);
+
+  return new Set([
+    ...((holidays ?? []) as any[]).map((h) => h.holiday_date as string),
+    ...((closures ?? []) as any[]).map((c) => c.closure_date as string),
+  ]);
+}
+
+function getMondayISO(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = d.getDay();
+  const diff = dow === 0 ? 6 : dow - 1;
+  d.setDate(d.getDate() - diff);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function getClosedByDeadlineDate(
+  client: SupabaseClient,
+  dates: string[]
+): Promise<string | null> {
+  if (dates.length === 0) return null;
+  const sorted = [...new Set(dates)].sort();
+  const weekStarts = [...new Set(sorted.map(getMondayISO))];
+  const [{ data: settingsRows }, { data: deadlineRows }] = await Promise.all([
+    client.from("admin_settings").select("key, value"),
+    client
+      .from("menu_selection_deadlines")
+      .select("week_start, deadline_at")
+      .in("week_start", weekStarts),
+  ]);
+  const settings: Record<string, string> = {};
+  for (const row of settingsRows ?? []) settings[row.key] = row.value;
+  const cutoffDay = parseInt(settings.menu_selection_cutoff_day ?? "4", 10);
+  const cutoffTime = settings.menu_selection_cutoff_time ?? "23:59";
+  const overrideMap = new Map(
+    (deadlineRows ?? []).map((row: any) => [
+      row.week_start as string,
+      row.deadline_at as string,
+    ])
+  );
+
+  for (const date of sorted) {
+    const override = overrideMap.get(getMondayISO(date));
+    const closed = override
+      ? new Date() >= new Date(override)
+      : isSelectionClosed(date, cutoffDay, cutoffTime);
+    if (closed) return date;
+  }
+  return null;
+}
+
 export async function getMyDeliveryDays(
   subscriptionId: string
 ): Promise<DeliveryDay[]> {
@@ -81,6 +162,31 @@ export async function getMyDeliveryDays(
     .order("week_start");
 
   return (data as DeliveryDay[]) ?? [];
+}
+
+export async function getMyDeliveryDaysBySubscriptionIds(
+  subscriptionIds: string[]
+): Promise<Record<string, DeliveryDay[]>> {
+  const uniqueIds = [...new Set(subscriptionIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return {};
+
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return {};
+
+  const { data } = await supabase
+    .from("delivery_days")
+    .select("*")
+    .eq("user_id", user.id)
+    .in("subscription_id", uniqueIds)
+    .order("week_start");
+
+  const grouped: Record<string, DeliveryDay[]> = {};
+  for (const id of uniqueIds) grouped[id] = [];
+  for (const row of (data as DeliveryDay[]) ?? []) {
+    (grouped[row.subscription_id] ??= []).push(row);
+  }
+  return grouped;
 }
 
 export async function getMyDeliveryDateStrings(): Promise<string[]> {
@@ -248,6 +354,23 @@ export async function saveDeliveryDays(
     return { error: "월~금만 선택 가능합니다" };
   }
 
+  const selectedDates = expandWeekSelectionToDateStrings(weekStart, selectedDays);
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const pastPick = selectedDates.find((date) => date < todayStr);
+  if (pastPick) {
+    return { error: `${pastPick}은 지난 날짜라 선택할 수 없습니다` };
+  }
+  const blockedDateSet = await getBlockedDateSet(supabase, selectedDates);
+  const blockedPick = selectedDates.find((date) => blockedDateSet.has(date));
+  if (blockedPick) {
+    return { error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다` };
+  }
+  const deadlineClosedPick = await getClosedByDeadlineDate(supabase, selectedDates);
+  if (deadlineClosedPick) {
+    return { error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다` };
+  }
+
   const { data: existing } = await supabase
     .from("delivery_days")
     .select("id")
@@ -325,6 +448,28 @@ export async function bulkSaveDeliveryDays(
     }
   }
 
+  const selectedDates = expandDeliveryDaysToDateStrings(
+    weeklySelections.map((w) => ({
+      week_start: w.weekStart,
+      selected_days: w.selectedDays,
+    }))
+  );
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const pastPick = selectedDates.find((date) => date < todayStr);
+  if (pastPick) {
+    return { error: `${pastPick}은 지난 날짜라 선택할 수 없습니다` };
+  }
+  const blockedDateSet = await getBlockedDateSet(supabase, selectedDates);
+  const blockedPick = selectedDates.find((date) => blockedDateSet.has(date));
+  if (blockedPick) {
+    return { error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다` };
+  }
+  const deadlineClosedPick = await getClosedByDeadlineDate(supabase, selectedDates);
+  if (deadlineClosedPick) {
+    return { error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다` };
+  }
+
   const { error: deleteError } = await supabase
     .from("delivery_days")
     .delete()
@@ -352,12 +497,7 @@ export async function bulkSaveDeliveryDays(
     }
   }
 
-  const newDates = expandDeliveryDaysToDateStrings(
-    weeklySelections.map((w) => ({
-      week_start: w.weekStart,
-      selected_days: w.selectedDays,
-    }))
-  );
+  const newDates = selectedDates;
   await cleanupStaleSelectionsForSubscription(
     supabase,
     user.id,

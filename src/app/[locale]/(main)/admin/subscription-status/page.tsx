@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { getSubscriptionPeriods } from "@/lib/actions/subscription";
 import { getHolidays } from "@/lib/actions/holiday";
+import { getStoreClosures } from "@/lib/actions/store-closure";
 import {
   getCallerAdminRole,
   getMyPermissions,
@@ -48,15 +49,26 @@ export default async function AdminSubscriptionStatusPage() {
     currentCounts,
     nextCounts,
     holidays,
+    storeClosures,
     currentSubscribers,
     nextSubscribers,
   ] = await Promise.all([
     currentPeriod ? getSubscriptionDayCounts(currentPeriod.id) : Promise.resolve({}),
     nextPeriod ? getSubscriptionDayCounts(nextPeriod.id) : Promise.resolve({}),
     getHolidays(),
+    getStoreClosures(),
     currentPeriod ? getPeriodSubscribers(currentPeriod.id) : Promise.resolve([]),
     nextPeriod ? getPeriodSubscribers(nextPeriod.id) : Promise.resolve([]),
   ]);
+  const blockedDays = [
+    ...holidays,
+    ...storeClosures.map((closure) => ({
+      id: closure.id,
+      holiday_date: closure.closure_date,
+      name: closure.reason || "매장 휴무",
+      source: "store_closure" as const,
+    })),
+  ];
 
   // Default tab: once the current month's payment window has closed, focus
   // the admin on whichever period is still actionable. Concretely, if
@@ -82,7 +94,7 @@ export default async function AdminSubscriptionStatusPage() {
         nextPeriod={nextPeriod ?? null}
         currentCounts={currentCounts}
         nextCounts={nextCounts}
-        holidays={holidays}
+        holidays={blockedDays}
         showSubscriberList
         showDateDetailPanel
         autoOpenFirstDataDate

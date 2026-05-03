@@ -18,6 +18,13 @@ import {
   importKoreanHolidays,
   getHolidays,
 } from "@/lib/actions/holiday";
+import {
+  addStoreClosureRange,
+  getStoreClosureReplacementNeeds,
+  getStoreClosures,
+  removeStoreClosure,
+  type StoreClosureReplacementNeed,
+} from "@/lib/actions/store-closure";
 import { toast } from "sonner";
 import {
   CalendarOff,
@@ -28,31 +35,44 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import type { Holiday } from "@/types";
+import type { Holiday, StoreClosure } from "@/types";
 
 interface HolidayManagementProps {
   initialHolidays: Holiday[];
+  initialStoreClosures: StoreClosure[];
+  initialReplacementNeeds: StoreClosureReplacementNeed[];
   year: number;
 }
 
 export function HolidayManagement({
   initialHolidays,
+  initialStoreClosures,
+  initialReplacementNeeds,
   year: initialYear,
 }: HolidayManagementProps) {
   const [holidays, setHolidays] = useState(initialHolidays);
+  const [storeClosures, setStoreClosures] = useState(initialStoreClosures);
+  const [replacementNeeds, setReplacementNeeds] = useState(initialReplacementNeeds);
   const [year, setYear] = useState(initialYear);
   const [newDate, setNewDate] = useState("");
   const [newName, setNewName] = useState("");
+  const [closureStartDate, setClosureStartDate] = useState("");
+  const [closureEndDate, setClosureEndDate] = useState("");
+  const [closureReason, setClosureReason] = useState("");
+  const [closureMemo, setClosureMemo] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  const [isAddingClosure, setIsAddingClosure] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
 
-  const holidayDates = new Set(holidays.map((h) => h.holiday_date));
-
   async function loadYear(y: number) {
     setYear(y);
-    const data = await getHolidays(y);
+    const [data, closures] = await Promise.all([
+      getHolidays(y),
+      getStoreClosures(y),
+    ]);
     setHolidays(data);
+    setStoreClosures(closures);
   }
 
   async function handleAdd() {
@@ -79,6 +99,46 @@ export function HolidayManagement({
     }
   }
 
+  async function handleAddClosure() {
+    if (!closureStartDate || !closureReason.trim()) {
+      toast.error("휴무 시작일과 사유를 입력해주세요");
+      return;
+    }
+    if (closureEndDate && closureEndDate < closureStartDate) {
+      toast.error("휴무 종료일은 시작일보다 빠를 수 없습니다");
+      return;
+    }
+
+    setIsAddingClosure(true);
+    try {
+      const result = await addStoreClosureRange(
+        closureStartDate,
+        closureEndDate || closureStartDate,
+        closureReason.trim(),
+        closureMemo.trim()
+      );
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(
+        result.affectedCount && result.affectedCount > 0
+          ? `매장 휴무 ${result.dateCount ?? 1}일이 추가되었습니다. ${result.affectedCount}명의 선택 날짜가 해제되었습니다.`
+          : `매장 휴무 ${result.dateCount ?? 1}일이 추가되었습니다`
+      );
+      setClosureStartDate("");
+      setClosureEndDate("");
+      setClosureReason("");
+      setClosureMemo("");
+      setSelectedDate(undefined);
+      const closures = await getStoreClosures(year);
+      setStoreClosures(closures);
+      setReplacementNeeds(await getStoreClosureReplacementNeeds());
+    } finally {
+      setIsAddingClosure(false);
+    }
+  }
+
   async function handleRemove(id: string) {
     const result = await removeHoliday(id);
     if (result.error) {
@@ -87,6 +147,17 @@ export function HolidayManagement({
     }
     setHolidays((prev) => prev.filter((h) => h.id !== id));
     toast.success("삭제되었습니다");
+  }
+
+  async function handleRemoveClosure(id: string) {
+    const result = await removeStoreClosure(id);
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    setStoreClosures((prev) => prev.filter((c) => c.id !== id));
+    setReplacementNeeds(await getStoreClosureReplacementNeeds());
+    toast.success("매장 휴무일이 삭제되었습니다");
   }
 
   async function handleImport() {
@@ -110,6 +181,8 @@ export function HolidayManagement({
     setSelectedDate(date);
     const dateStr = formatDateToISO(date);
     setNewDate(dateStr);
+    setClosureStartDate(dateStr);
+    setClosureEndDate(dateStr);
   }
 
   function formatDateToISO(date: Date) {
@@ -135,7 +208,7 @@ export function HolidayManagement({
             <ArrowLeft className="h-5 w-5" />
           </Link>
           <CalendarOff className="h-5 w-5" />
-          <h1 className="text-2xl font-bold tracking-tight">공휴일 관리</h1>
+          <h1 className="text-2xl font-bold tracking-tight">휴무일 관리</h1>
         </div>
         <Button
           variant="outline"
@@ -165,7 +238,7 @@ export function HolidayManagement({
                 const newYear = month.getFullYear();
                 if (newYear !== year) loadYear(newYear);
               }}
-              className="w-full p-0"
+              className="w-full max-w-full overflow-hidden p-1 [--cell-size:clamp(2rem,11vw,2.25rem)]"
               classNames={{
                 root: "w-full",
                 day: "flex-1",
@@ -175,10 +248,15 @@ export function HolidayManagement({
                 holiday: holidays.map(
                   (h) => new Date(h.holiday_date + "T00:00:00")
                 ),
+                storeClosure: storeClosures.map(
+                  (c) => new Date(c.closure_date + "T00:00:00")
+                ),
               }}
               modifiersClassNames={{
                 holiday:
                   "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+                storeClosure:
+                  "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
               }}
             />
 
@@ -213,6 +291,55 @@ export function HolidayManagement({
               </div>
               <p className="text-xs text-muted-foreground">
                 캘린더에서 날짜를 클릭하면 자동으로 입력됩니다
+              </p>
+            </div>
+
+            <Separator />
+
+            <div className="space-y-3">
+              <Label>매장 휴무 추가</Label>
+              <div className="grid gap-2 sm:grid-cols-[1fr_1fr]">
+                <Input
+                  type="date"
+                  value={closureStartDate}
+                  onChange={(e) => {
+                    setClosureStartDate(e.target.value);
+                    if (!closureEndDate || closureEndDate < e.target.value) {
+                      setClosureEndDate(e.target.value);
+                    }
+                  }}
+                />
+                <Input
+                  type="date"
+                  value={closureEndDate}
+                  onChange={(e) => setClosureEndDate(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <Input
+                  placeholder="휴무 사유 (예: 시설 점검)"
+                  value={closureReason}
+                  onChange={(e) => setClosureReason(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  onClick={handleAddClosure}
+                  disabled={isAddingClosure}
+                >
+                  {isAddingClosure ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <Input
+                placeholder="메모 (선택)"
+                value={closureMemo}
+                onChange={(e) => setClosureMemo(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                시작일과 종료일을 같게 두면 하루만 등록됩니다. 이미 휴무 범위 안의 날짜를 선택한 사용자는 자동으로 선택이 해제되고, 홈에서 다시 날짜를 선택하도록 안내됩니다.
               </p>
             </div>
           </CardContent>
@@ -252,6 +379,87 @@ export function HolidayManagement({
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => handleRemove(holiday.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base">
+              날짜 재선택 필요 사용자 ({replacementNeeds.length}명)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {replacementNeeds.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                현재 재선택이 필요한 사용자가 없습니다
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {replacementNeeds.map((need) => (
+                  <div
+                    key={need.subscriptionId}
+                    className="flex items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-medium">{need.realName}</span>
+                      <span className="ml-2 text-muted-foreground">
+                        {need.targetMonth}
+                      </span>
+                    </div>
+                    <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                      {need.remainingSlots}일 재선택 필요 ({need.selectedCount}/
+                      {need.requiredCount})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base">
+              {year}년 매장 휴무 목록 ({storeClosures.length}일)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {storeClosures.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                등록된 매장 휴무일이 없습니다
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {storeClosures.map((closure) => (
+                  <div
+                    key={closure.id}
+                    className="flex items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="shrink-0 text-muted-foreground">
+                        {formatDisplay(closure.closure_date)}
+                      </span>
+                      <span className="font-medium">{closure.reason}</span>
+                      {closure.memo && (
+                        <span className="truncate text-xs text-muted-foreground">
+                          {closure.memo}
+                        </span>
+                      )}
+                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        매장 휴무
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleRemoveClosure(closure.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>

@@ -34,6 +34,7 @@ import type { Menu, DailyMenu } from "@/types";
 import {
   getDailyMenusByDate,
   assignMenuToDate,
+  assignFixedSideMenusToOpenDates,
   removeMenuFromDate,
 } from "@/lib/actions/menu";
 
@@ -50,6 +51,7 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
   const [selectedMenuId, setSelectedMenuId] = useState<string>("");
   const [slotType, setSlotType] = useState<"main" | "optional">("main");
   const [isAssigning, setIsAssigning] = useState(false);
+  const [isBulkAssigning, setIsBulkAssigning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const dateStr = selectedDate ? formatDateISO(selectedDate) : "";
@@ -74,6 +76,8 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
 
   const assignedMenuIds = new Set(assignments.map((a) => a.menu_id));
   const availableMenus = menus.filter((m) => !assignedMenuIds.has(m.id));
+  const selectedMenu = menus.find((m) => m.id === selectedMenuId);
+  const isSelectedSideMenu = !!selectedMenu && selectedMenu.category !== "salad";
 
   async function handleAssign() {
     if (!dateStr || !selectedMenuId) {
@@ -83,7 +87,14 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
 
     setIsAssigning(true);
     try {
-      const result = await assignMenuToDate(dateStr, selectedMenuId, slotType);
+      // Sandwich/bowl menus are fixed side menus, so keep them optional even
+      // if the admin last used the "main" selector for a salad.
+      const effectiveSlotType = isSelectedSideMenu ? "optional" : slotType;
+      const result = await assignMenuToDate(
+        dateStr,
+        selectedMenuId,
+        effectiveSlotType
+      );
       if (result.error) {
         toast.error(result.error);
         return;
@@ -93,6 +104,23 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
       await loadAssignments(dateStr);
     } finally {
       setIsAssigning(false);
+    }
+  }
+
+  async function handleAssignFixedSideMenus() {
+    setIsBulkAssigning(true);
+    try {
+      const result = await assignFixedSideMenusToOpenDates();
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(
+        `고정 사이드 메뉴 ${result.menuCount ?? 0}개를 ${result.dateCount ?? 0}일에 배정했습니다`
+      );
+      if (dateStr) await loadAssignments(dateStr);
+    } finally {
+      setIsBulkAssigning(false);
     }
   }
 
@@ -115,6 +143,31 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
         <CalendarDays className="h-5 w-5" />
         <h1 className="text-2xl font-bold tracking-tight">일일 메뉴 배정</h1>
       </div>
+
+      <Card className="border-dashed">
+        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-semibold">고정 사이드 메뉴 자동 배정</p>
+            <p className="text-xs text-muted-foreground">
+              활성화된 샌드위치/보울 메뉴를 오늘 이후의 모든 오픈 배달일에 선택 메뉴로 배정합니다.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleAssignFixedSideMenus}
+            disabled={isBulkAssigning}
+            className="shrink-0"
+          >
+            {isBulkAssigning ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-4 w-4" />
+            )}
+            전체 오픈일에 배정
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-[auto_1fr]">
         <Card>
@@ -148,7 +201,11 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Select
                       value={selectedMenuId}
-                      onValueChange={(val) => setSelectedMenuId(val ?? "")}
+                      onValueChange={(val) => {
+                        setSelectedMenuId(val ?? "");
+                        const nextMenu = menus.find((m) => m.id === val);
+                        if (nextMenu?.category !== "salad") setSlotType("optional");
+                      }}
                     >
                       <SelectTrigger className="flex-1">
                         <span className="flex flex-1 text-left">{availableMenus.find((m) => m.id === selectedMenuId)?.title ?? "메뉴 선택..."}</span>
@@ -173,9 +230,16 @@ export function AssignmentManagement({ menus }: { menus: Menu[] }) {
                       onValueChange={(v) =>
                         setSlotType((v ?? "main") as "main" | "optional")
                       }
+                      disabled={isSelectedSideMenu}
                     >
                       <SelectTrigger className="w-28">
-                        <span className="flex flex-1 text-left">{slotType === "main" ? "메인" : "선택"}</span>
+                        <span className="flex flex-1 text-left">
+                          {isSelectedSideMenu
+                            ? "선택"
+                            : slotType === "main"
+                              ? "메인"
+                              : "선택"}
+                        </span>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="main">메인</SelectItem>

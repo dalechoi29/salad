@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
@@ -19,6 +19,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import {
   createOrUpdateSubscription,
+  resolveCarryoverReplacement,
   updatePaymentAndMarkPaid,
   updatePaymentMethod,
   cancelSubscription,
@@ -67,6 +68,7 @@ import type {
   Subscription,
   PaymentMethod,
 } from "@/types";
+import type { CarryoverReplacement } from "@/lib/actions/subscription";
 
 interface SubscriptionViewProps {
   period: SubscriptionPeriod | null;
@@ -74,6 +76,7 @@ interface SubscriptionViewProps {
   holidays: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
+  carryoverReplacement?: CarryoverReplacement | null;
 }
 
 const WEEKS_PER_MONTH = 4;
@@ -375,12 +378,43 @@ function formatDate(dateStr: string) {
   });
 }
 
+function getPlannedPaidDeliveryDays(
+  frequency: number | null,
+  selectedCount: number,
+  period: SubscriptionPeriod,
+  holidays: Set<string>,
+  carryoverDays: number
+): number {
+  if (selectedCount > 0) {
+    if (frequency === 0) {
+      return Math.max(0, selectedCount - carryoverDays);
+    }
+
+    const baseDays = getMinDeliveryDaysForFrequency(
+      frequency ?? 0,
+      period.delivery_start,
+      period.delivery_end,
+      holidays
+    );
+    return Math.min(selectedCount, baseDays);
+  }
+
+  if (frequency === 0) return 0;
+  return getMinDeliveryDaysForFrequency(
+    frequency ?? 0,
+    period.delivery_start,
+    period.delivery_end,
+    holidays
+  );
+}
+
 export function SubscriptionView({
   period,
   existingSubscription,
   holidays,
   savedDeliveryDates = [],
   lastPaymentMethod,
+  carryoverReplacement,
 }: SubscriptionViewProps) {
   const t = useTranslations("subscription");
   const tCommon = useTranslations("common");
@@ -422,6 +456,7 @@ export function SubscriptionView({
         holidays={holidays}
         savedDeliveryDates={savedDeliveryDates}
         lastPaymentMethod={lastPaymentMethod}
+        carryoverReplacement={carryoverReplacement}
         onCancelled={() => setCancelled(true)}
       />
     );
@@ -431,6 +466,7 @@ export function SubscriptionView({
     <SubscriptionForm
       period={period}
       holidays={holidays}
+      carryoverReplacement={carryoverReplacement}
       onSuccess={() => setShowSuccess(true)}
     />
   );
@@ -476,10 +512,12 @@ function SuccessScreen({
 function SubscriptionForm({
   period,
   holidays,
+  carryoverReplacement,
   onSuccess,
 }: {
   period: SubscriptionPeriod;
   holidays: string[];
+  carryoverReplacement?: CarryoverReplacement | null;
   onSuccess: () => void;
 }) {
   const t = useTranslations("subscription");
@@ -494,7 +532,10 @@ function SubscriptionForm({
   const phase = getPeriodPhase(period);
   const canEdit = phase === "applying" || phase === "paying";
 
-  const holidaySet = new Set(holidays);
+  const holidaySet = useMemo(() => new Set(holidays), [holidays]);
+  const carryoverDaysAvailable = carryoverReplacement?.availableDays ?? 0;
+  const carryoverUsedDates = carryoverReplacement?.usedDates ?? [];
+  const carryoverDaysAlreadySelected = carryoverUsedDates.length;
   const holidayDates = holidays.map((d) => new Date(d + "T00:00:00"));
   const calendarMonth = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
@@ -513,7 +554,7 @@ function SubscriptionForm({
         )
       );
     }
-  }, [selectedPreset, period.delivery_start, period.delivery_end]);
+  }, [holidaySet, selectedPreset, period.delivery_start, period.delivery_end]);
 
   const toggleDate = useCallback(
     (date: Date) => {
@@ -537,24 +578,47 @@ function SubscriptionForm({
           }
         }
 
+        const baseDays = getMinDeliveryDaysForFrequency(
+          frequency ?? 0,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
+        const maxSelectable =
+          frequency !== null && frequency > 0 && carryoverDaysAvailable > 0
+            ? baseDays + carryoverDaysAvailable
+            : null;
+        if (maxSelectable !== null && next.length >= maxSelectable) {
+          toast.error(`최대 ${maxSelectable}일까지 선택할 수 있어요`);
+          return prev;
+        }
+
         next.push(date);
         return next.sort((a, b) => a.getTime() - b.getTime());
       });
       setSelectedPreset(null);
     },
-    [frequency]
+    [carryoverDaysAvailable, frequency, holidaySet, period.delivery_end, period.delivery_start]
   );
 
   const holidaySetForCount = new Set(holidays);
-  const deliveryDayCount =
-    selectedDates.length > 0
-      ? selectedDates.length
-      : frequency === 0
-        ? 0
-        : getMinDeliveryDaysForFrequency(frequency ?? 0, period.delivery_start, period.delivery_end, holidaySetForCount);
+  const paidDeliveryDayCount = getPlannedPaidDeliveryDays(
+    frequency,
+    selectedDates.length,
+    period,
+    holidaySetForCount,
+    carryoverDaysAvailable
+  );
+  const carryoverDaysUsed = Math.min(
+    carryoverDaysAvailable,
+    Math.max(0, selectedDates.length - paidDeliveryDayCount)
+  );
+  const totalCarryoverDays = carryoverDaysUsed + carryoverDaysAlreadySelected;
+  const deliveryDayCount = paidDeliveryDayCount + totalCarryoverDays;
+  const paidTotalSalads = paidDeliveryDayCount * salads;
   const totalSalads = deliveryDayCount * salads;
   const totalPrice =
-    period.price_per_salad > 0 ? totalSalads * period.price_per_salad : null;
+    period.price_per_salad > 0 ? paidTotalSalads * period.price_per_salad : null;
 
   async function handleSubmit() {
     if (frequency === null) return;
@@ -569,7 +633,11 @@ function SubscriptionForm({
         period.id,
         effectiveFrequency,
         salads,
-        selectedDates.length > 0 ? selectedDates.length : undefined
+        paidDeliveryDayCount > 0 ? paidDeliveryDayCount : undefined,
+        carryoverDaysUsed,
+        carryoverDaysUsed > 0
+          ? carryoverReplacement?.sourceSubscriptionId
+          : null
       );
 
       if (result.error) {
@@ -590,6 +658,18 @@ function SubscriptionForm({
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
           toast.error("배달일 동기화 실패: " + syncResult.error);
+          return;
+        }
+
+        if (carryoverDaysUsed > 0) {
+          const resolveResult = await resolveCarryoverReplacement(
+            result.subscriptionId
+          );
+          if (resolveResult.error) {
+            if (handleActionError(resolveResult.error, router)) return;
+            toast.error("휴무 보상일 처리 실패: " + resolveResult.error);
+            return;
+          }
         }
       }
 
@@ -616,6 +696,19 @@ function SubscriptionForm({
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              {carryoverDaysAlreadySelected > 0
+                ? `매장 휴무 보상일 ${carryoverDaysAlreadySelected}일을 이미 선택했어요.`
+                : null}
+              {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
+              {carryoverDaysAvailable > 0
+                ? `매장 휴무로 선택하지 못한 ${carryoverDaysAvailable}일을 이번 달에 추가로 선택할 수 있어요.`
+                : null}
+              {" "}추가 결제는 없어요.
+            </div>
+          ) : null}
+
           <div className="space-y-3">
             <Label>{t("frequency")}</Label>
             <div className="flex gap-1">
@@ -742,6 +835,14 @@ function SubscriptionForm({
               <span className="text-muted-foreground">배달 횟수</span>
               <span className="font-medium">{deliveryDayCount}회</span>
             </div>
+            {totalCarryoverDays > 0 && (
+              <div className="flex justify-between text-amber-700 dark:text-amber-300">
+                <span>휴무 보상</span>
+                <span className="font-medium">
+                  결제 대상 {paidDeliveryDayCount}일 + 보상 {totalCarryoverDays}일
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">월 총 샐러드</span>
               <span className="font-medium">{totalSalads}개</span>
@@ -778,6 +879,7 @@ function SubscriptionStatus({
   holidays,
   savedDeliveryDates: initialSavedDates = [],
   lastPaymentMethod,
+  carryoverReplacement,
   onCancelled,
 }: {
   period: SubscriptionPeriod;
@@ -785,6 +887,7 @@ function SubscriptionStatus({
   holidays: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
+  carryoverReplacement?: CarryoverReplacement | null;
   onCancelled?: () => void;
 }) {
   const t = useTranslations("subscription");
@@ -826,7 +929,17 @@ function SubscriptionStatus({
   );
 
   const phase = getPeriodPhase(period);
-  const holidaySet = new Set(holidays);
+  const holidaySet = useMemo(() => new Set(holidays), [holidays]);
+  const carryoverDaysAvailable =
+    subscription.carryover_delivery_days && subscription.carryover_delivery_days > 0
+      ? subscription.carryover_delivery_days
+      : (carryoverReplacement?.availableDays ?? 0);
+  const carryoverUsedDates = carryoverReplacement?.usedDates ?? [];
+  const carryoverDaysAlreadySelected = carryoverUsedDates.length;
+  const carryoverSourceSubscriptionId =
+    subscription.carryover_from_subscription_id ??
+    carryoverReplacement?.sourceSubscriptionId ??
+    null;
 
   const appliedDeliveryDays =
     subscription.total_delivery_days ??
@@ -845,10 +958,18 @@ function SubscriptionStatus({
               )
             : getMinDeliveryDaysForFrequency(currentFrequency, period.delivery_start, period.delivery_end, holidaySet);
         })());
-  const currentDeliveryDays = savedDates.length > 0 ? savedDates.length : appliedDeliveryDays;
+  const currentCarryoverDaysUsed = Math.min(
+    carryoverDaysAvailable,
+    Math.max(0, savedDates.length - appliedDeliveryDays)
+  );
+  const currentTotalCarryoverDays =
+    currentCarryoverDaysUsed + carryoverDaysAlreadySelected;
+  const currentDeliveryDays =
+    savedDates.length > 0
+      ? savedDates.length + carryoverDaysAlreadySelected
+      : appliedDeliveryDays + currentTotalCarryoverDays;
   const totalSalads = appliedDeliveryDays * currentSalads;
-  const totalPrice =
-    period.price_per_salad > 0 ? totalSalads * period.price_per_salad : null;
+  const displayedTotalSalads = currentDeliveryDays * currentSalads;
 
   const matchedPresetLabel = detectMatchingPreset(
     savedDates,
@@ -894,7 +1015,7 @@ function SubscriptionStatus({
         )
       );
     }
-  }, [selectedPreset, period.delivery_start, period.delivery_end]);
+  }, [holidaySet, selectedPreset, period.delivery_start, period.delivery_end]);
 
   function handleStartEditing() {
     setFrequency(isCustomDates ? 0 : currentFrequency);
@@ -926,24 +1047,46 @@ function SubscriptionStatus({
           }
         }
 
+        const baseDays = getMinDeliveryDaysForFrequency(
+          frequency,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
+        const maxSelectable =
+          frequency > 0 && carryoverDaysAvailable > 0
+            ? baseDays + carryoverDaysAvailable
+            : null;
+        if (maxSelectable !== null && next.length >= maxSelectable) {
+          toast.error(`최대 ${maxSelectable}일까지 선택할 수 있어요`);
+          return prev;
+        }
+
         next.push(date);
         return next.sort((a, b) => a.getTime() - b.getTime());
       });
       setSelectedPreset(null);
     },
-    [frequency]
+    [carryoverDaysAvailable, frequency, holidaySet, period.delivery_end, period.delivery_start]
   );
 
-  const editDeliveryDays =
-    editSelectedDates.length > 0
-      ? editSelectedDates.length
-      : frequency === 0
-        ? 0
-        : getMinDeliveryDaysForFrequency(frequency, period.delivery_start, period.delivery_end, holidaySet);
+  const editPaidDeliveryDays = getPlannedPaidDeliveryDays(
+    frequency,
+    editSelectedDates.length,
+    period,
+    holidaySet,
+    carryoverDaysAvailable
+  );
+  const editCarryoverDaysUsed = Math.min(
+    carryoverDaysAvailable,
+    Math.max(0, editSelectedDates.length - editPaidDeliveryDays)
+  );
+  const editDeliveryDays = editPaidDeliveryDays + editCarryoverDaysUsed;
   const editTotalSalads = editDeliveryDays * salads;
+  const editPaidTotalSalads = editPaidDeliveryDays * salads;
   const editTotalPrice =
     period.price_per_salad > 0
-      ? editTotalSalads * period.price_per_salad
+      ? editPaidTotalSalads * period.price_per_salad
       : null;
 
   const isPaid = paymentStatus === "completed";
@@ -968,7 +1111,9 @@ function SubscriptionStatus({
         period.id,
         effectiveFrequency,
         salads,
-        editSelectedDates.length > 0 ? editSelectedDates.length : undefined
+        editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
+        editCarryoverDaysUsed,
+        editCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null
       );
       if (result.error) {
         if (handleActionError(result.error, router)) return;
@@ -984,6 +1129,18 @@ function SubscriptionStatus({
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
           toast.error("배달일 동기화 실패: " + syncResult.error);
+          return;
+        }
+
+        if (editCarryoverDaysUsed > 0) {
+          const resolveResult = await resolveCarryoverReplacement(
+            result.subscriptionId
+          );
+          if (resolveResult.error) {
+            if (handleActionError(resolveResult.error, router)) return;
+            toast.error("휴무 보상일 처리 실패: " + resolveResult.error);
+            return;
+          }
         }
       }
 
@@ -1130,6 +1287,19 @@ function SubscriptionStatus({
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
+          {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              {carryoverDaysAlreadySelected > 0
+                ? `매장 휴무 보상일 ${carryoverDaysAlreadySelected}일을 이미 선택했어요.`
+                : null}
+              {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
+              {carryoverDaysAvailable > 0
+                ? `매장 휴무로 선택하지 못한 ${carryoverDaysAvailable}일을 이번 달에 추가로 선택할 수 있어요.`
+                : null}
+              {" "}추가 결제는 없어요.
+            </div>
+          ) : null}
+
           {isEditing ? (
             <div className="space-y-4">
               <div className="space-y-3">
@@ -1247,6 +1417,14 @@ function SubscriptionStatus({
                   <span className="text-muted-foreground">배달 횟수</span>
                   <span className="font-medium">{editDeliveryDays}회</span>
                 </div>
+                {editCarryoverDaysUsed > 0 && (
+                  <div className="flex justify-between text-amber-700 dark:text-amber-300">
+                    <span>휴무 보상</span>
+                    <span className="font-medium">
+                      결제 대상 {editPaidDeliveryDays}일 + 보상 {editCarryoverDaysUsed}일
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">월 총 샐러드</span>
                   <span className="font-medium">{editTotalSalads}개</span>
@@ -1310,12 +1488,20 @@ function SubscriptionStatus({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">선택한 날짜</span>
                 <span>
-                  {currentDeliveryDays}/{appliedDeliveryDays}일
+                  {currentDeliveryDays}/{appliedDeliveryDays + currentTotalCarryoverDays}일
                 </span>
               </div>
+              {currentTotalCarryoverDays > 0 && (
+                <div className="flex justify-between text-amber-700 dark:text-amber-300">
+                  <span>휴무 보상</span>
+                  <span>
+                    결제 대상 {appliedDeliveryDays}일 + 보상 {currentTotalCarryoverDays}일
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between font-medium">
                 <span>월 총 샐러드</span>
-                <span>{totalSalads}개</span>
+                <span>{displayedTotalSalads}개</span>
               </div>
               <div className="flex justify-between text-lg font-semibold">
                 <span>총 금액</span>

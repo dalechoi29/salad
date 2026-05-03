@@ -1,8 +1,13 @@
 import { Suspense } from "react";
 import { getMySubscriptions } from "@/lib/actions/subscription";
-import { getMyDeliveryDays } from "@/lib/actions/delivery";
-import { getMenuSelectionCutoff } from "@/lib/actions/admin";
-import { getDailyMenus, getMyMenuSelections, getMyFavorites } from "@/lib/actions/menu";
+import { getMyDeliveryDaysBySubscriptionIds } from "@/lib/actions/delivery";
+import {
+  getMenuSelectionCutoff,
+  getWeeklyMenuDeadlines,
+} from "@/lib/actions/admin";
+import { getDailyMenus, getMyMenuSelections, getMyFavoriteIds } from "@/lib/actions/menu";
+import { getHolidays } from "@/lib/actions/holiday";
+import { getStoreClosures } from "@/lib/actions/store-closure";
 import { deliveryDaysToDateStrings, formatDateISO, getKSTDate } from "@/lib/utils";
 import { MenuSelectionView } from "./menu-selection-view";
 import { MenuSkeleton } from "./menu-skeleton";
@@ -41,6 +46,16 @@ function addDaysISO(dateStr: string, days: number): string {
   return formatDateISO(d);
 }
 
+function isInLastWeekOfMonth(date: Date): boolean {
+  const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const lastWeekMonday = new Date(monthEnd);
+  const dow = lastWeekMonday.getDay();
+  const diff = dow === 0 ? 6 : dow - 1;
+  lastWeekMonday.setDate(lastWeekMonday.getDate() - diff);
+  lastWeekMonday.setHours(0, 0, 0, 0);
+  return date >= lastWeekMonday;
+}
+
 // Clamp the initial week to the month range so we don't accidentally request
 // rows outside the schedule.
 function getInitialWeekRange(
@@ -66,8 +81,21 @@ export default function MenuPage() {
 
 async function MenuPageContent() {
   const today = getKSTDate();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  // During the last week of a month, users need to pick menus for the
+  // following week's deliveries, which often belong to the next month.
+  // Switch the /menu workflow to next month from the Monday of the current
+  // month's final week so those next-month delivery dates become selectable.
+  const targetMonthOffset = isInLastWeekOfMonth(today) ? 1 : 0;
+  const monthStart = new Date(
+    today.getFullYear(),
+    today.getMonth() + targetMonthOffset,
+    1
+  );
+  const monthEnd = new Date(
+    today.getFullYear(),
+    today.getMonth() + targetMonthOffset + 1,
+    0
+  );
 
   const rangeStart = formatDateISO(monthStart);
   const rangeEnd = formatDateISO(monthEnd);
@@ -80,23 +108,31 @@ async function MenuPageContent() {
 
   // Only load the current week's menu data + selections on the server.
   // Adjacent weeks are lazy-loaded client-side on demand to keep first paint fast.
-  const [allSubscriptions, cutoff, initialMenus, initialSelections, initialFavorites] =
+  const [allSubscriptions, cutoff, weeklyDeadlines, initialMenus, initialSelections, initialFavorites, holidays, storeClosures] =
     await Promise.all([
       getMySubscriptions(),
       getMenuSelectionCutoff(),
+      getWeeklyMenuDeadlines(getWeekMondayISO(monthStart), rangeEnd),
       getDailyMenus(initialWeekStart, initialWeekEnd),
       getMyMenuSelections(initialWeekStart, initialWeekEnd),
-      getMyFavorites(),
+      getMyFavoriteIds(),
+      getHolidays(monthStart.getFullYear()),
+      getStoreClosures(monthStart.getFullYear()),
     ]);
 
   const subscription = findSubscriptionForMonth(allSubscriptions, rangeStart, rangeEnd);
 
-  let myDeliveryDates: string[] = [];
   const saladsPerDelivery = subscription?.salads_per_delivery ?? 1;
-  if (subscription) {
-    const days = await getMyDeliveryDays(subscription.id);
-    myDeliveryDates = deliveryDaysToDateStrings(days);
-  }
+  const deliveryDaysBySub = subscription
+    ? await getMyDeliveryDaysBySubscriptionIds([subscription.id])
+    : {};
+  const myDeliveryDates = subscription
+    ? deliveryDaysToDateStrings(deliveryDaysBySub[subscription.id] ?? [])
+    : [];
+  const blockedDates = [
+    ...holidays.map((h) => h.holiday_date),
+    ...storeClosures.map((c) => c.closure_date),
+  ];
 
   return (
     <MenuSelectionView
@@ -109,9 +145,13 @@ async function MenuPageContent() {
       saladsPerDelivery={saladsPerDelivery}
       initialMenus={initialMenus}
       initialSelections={initialSelections}
-      initialFavoriteIds={initialFavorites.map((f) => f.menu_id)}
+      initialFavoriteIds={initialFavorites}
       initialWeekStart={initialWeekStart}
       initialWeekEnd={initialWeekEnd}
+      blockedDates={blockedDates}
+      deadlineOverrides={Object.fromEntries(
+        weeklyDeadlines.map((d) => [d.week_start, d.deadline_at])
+      )}
     />
   );
 }

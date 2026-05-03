@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -30,7 +30,7 @@ import {
   getMyMenuSelections,
   updateMenuQuantity,
   toggleFavorite,
-  getMyFavorites,
+  getMyFavoriteIds,
 } from "@/lib/actions/menu";
 import { handleActionError } from "@/lib/handle-action-error";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -87,6 +87,8 @@ interface MenuSelectionViewProps {
   initialFavoriteIds?: string[];
   initialWeekStart?: string;
   initialWeekEnd?: string;
+  blockedDates?: string[];
+  deadlineOverrides?: Record<string, string>;
 }
 
 export function MenuSelectionView({
@@ -102,6 +104,8 @@ export function MenuSelectionView({
   initialFavoriteIds,
   initialWeekStart,
   initialWeekEnd,
+  blockedDates = [],
+  deadlineOverrides = {},
 }: MenuSelectionViewProps) {
   const hasInitialData = !!initialMenus;
   const [dailyMenus, setDailyMenus] = useState<DailyMenu[]>(initialMenus ?? []);
@@ -123,30 +127,53 @@ export function MenuSelectionView({
   const [weekLoading, setWeekLoading] = useState<string | null>(null);
 
   const router = useRouter();
-  const allWeekdays =
-    deliveryStart && deliveryEnd
-      ? getWeekdaysBetween(deliveryStart, deliveryEnd)
-      : [];
+  const allWeekdays = useMemo(
+    () =>
+      deliveryStart && deliveryEnd
+        ? getWeekdaysBetween(deliveryStart, deliveryEnd)
+        : [],
+    [deliveryStart, deliveryEnd]
+  );
+  const blockedDateSet = useMemo(() => new Set(blockedDates), [blockedDates]);
+  const selectableWeekdays = useMemo(
+    () => allWeekdays.filter((d) => !blockedDateSet.has(d)),
+    [allWeekdays, blockedDateSet]
+  );
 
-  const deliveryDateSet = myDeliveryDates && myDeliveryDates.length > 0
-    ? new Set(myDeliveryDates)
-    : null;
+  const deliveryDateSet = useMemo(
+    () =>
+      myDeliveryDates && myDeliveryDates.length > 0
+        ? new Set(myDeliveryDates)
+        : null,
+    [myDeliveryDates]
+  );
 
-  const filteredWeekdays = deliveryDateSet
-    ? allWeekdays.filter((d) => deliveryDateSet.has(d))
-    : [];
+  const filteredWeekdays = useMemo(
+    () =>
+      deliveryDateSet
+        ? selectableWeekdays.filter((d) => deliveryDateSet.has(d))
+        : [],
+    [deliveryDateSet, selectableWeekdays]
+  );
 
   const isBrowseOnly = !deliveryDateSet || filteredWeekdays.length === 0;
-  const weekdays = isBrowseOnly ? allWeekdays : filteredWeekdays;
+  const weekdays = useMemo(
+    () => (isBrowseOnly ? selectableWeekdays : filteredWeekdays),
+    [filteredWeekdays, isBrowseOnly, selectableWeekdays]
+  );
 
-  const weeks = weekdays.reduce<Record<string, string[]>>((acc, date) => {
-    const week = getWeekNumber(date);
-    if (!acc[week]) acc[week] = [];
-    acc[week].push(date);
-    return acc;
-  }, {});
+  const weeks = useMemo(
+    () =>
+      weekdays.reduce<Record<string, string[]>>((acc, date) => {
+        const week = getWeekNumber(date);
+        if (!acc[week]) acc[week] = [];
+        acc[week].push(date);
+        return acc;
+      }, {}),
+    [weekdays]
+  );
 
-  const weekKeys = Object.keys(weeks).sort();
+  const weekKeys = useMemo(() => Object.keys(weeks).sort(), [weeks]);
 
   const [currentWeekIdx, setCurrentWeekIdx] = useState(0);
   const currentWeekKey = weekKeys[currentWeekIdx] ?? "";
@@ -160,11 +187,11 @@ export function MenuSelectionView({
       const [menuData, selData, favData] = await Promise.all([
         getDailyMenus(deliveryStart, deliveryEnd),
         getMyMenuSelections(deliveryStart, deliveryEnd),
-        getMyFavorites(),
+        getMyFavoriteIds(),
       ]);
       setDailyMenus(menuData);
       setSelections(selData);
-      setFavoriteIds(new Set(favData.map((f) => f.menu_id)));
+      setFavoriteIds(new Set(favData));
       // Whole-range load: mark every week we know about as loaded.
       for (const wk of Object.keys(weeks)) {
         loadedWeeksRef.current.add(wk);
@@ -274,6 +301,13 @@ export function MenuSelectionView({
 
   function getSelectionsForDate(dateStr: string): MenuSelection[] {
     return selections.filter((s) => s.delivery_date === dateStr);
+  }
+
+  function isDateSelectionClosed(dateStr: string): boolean {
+    const week = getWeekNumber(dateStr);
+    const override = deadlineOverrides[week];
+    if (override) return new Date() >= new Date(override);
+    return isSelectionClosed(dateStr, cutoffDay, cutoffTime);
   }
 
   function getQuantityForMenu(dateStr: string, dailyMenuId: string): number {
@@ -401,7 +435,7 @@ export function MenuSelectionView({
   }
 
   const openDates = weekdays.filter(
-    (d) => !isSelectionClosed(d, cutoffDay, cutoffTime)
+    (d) => !isDateSelectionClosed(d)
   );
   const selectedCount = openDates.filter((d) => getDayTotal(d) > 0).length;
   const totalOpenDates = openDates.length;
@@ -480,7 +514,7 @@ export function MenuSelectionView({
           const menusForDay = getMenusForDate(dateStr);
           const dayTotal = getDayTotal(dateStr);
           const dayComplete = !isBrowseOnly && dayTotal >= saladsPerDelivery;
-          const closed = !isBrowseOnly && isSelectionClosed(dateStr, cutoffDay, cutoffTime);
+          const closed = !isBrowseOnly && isDateSelectionClosed(dateStr);
 
           return (
             <Card key={dateStr}>

@@ -123,6 +123,13 @@ export async function cancelSubscription(
 
   if (!user) return { error: "AUTH_REQUIRED" };
 
+  const { data: current } = await supabase
+    .from("subscriptions")
+    .select("carryover_from_subscription_id")
+    .eq("id", subscriptionId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
   const { error } = await supabase
     .from("subscriptions")
     .delete()
@@ -130,6 +137,14 @@ export async function cancelSubscription(
     .eq("user_id", user.id);
 
   if (error) return { error: error.message };
+
+  if (current?.carryover_from_subscription_id) {
+    await supabase
+      .from("subscriptions")
+      .update({ closure_reselection_required: true })
+      .eq("id", current.carryover_from_subscription_id)
+      .eq("user_id", user.id);
+  }
 
   await supabase
     .from("delivery_days")
@@ -213,11 +228,219 @@ export async function getMyLastPaymentMethod(): Promise<string | null> {
   return data?.payment_method ?? null;
 }
 
+export type CarryoverReplacement = {
+  sourceSubscriptionId: string;
+  availableDays: number;
+  targetMonth: string;
+  usedDates: string[];
+};
+
+type SubscriptionWithPeriod = {
+  id: string;
+  user_id: string;
+  period_id: string;
+  frequency_per_week: number | null;
+  total_delivery_days: number | null;
+  payment_status: string | null;
+  closure_reselection_required: boolean | null;
+  subscription_periods: {
+    target_month: string;
+    delivery_start: string | null;
+    delivery_end: string | null;
+  } | null;
+};
+
+type CarryoverUsageRow = {
+  id: string;
+  carryover_delivery_days: number | null;
+};
+
+type ExistingCarryoverSubscription = CarryoverUsageRow & {
+  carryover_from_subscription_id: string | null;
+};
+
+function getEffectiveTotalDays(
+  subscription: Pick<
+    SubscriptionWithPeriod,
+    "frequency_per_week" | "total_delivery_days"
+  >
+): number {
+  return (
+    (subscription.total_delivery_days ?? 0) ||
+    ((subscription.frequency_per_week ?? 0) * 4)
+  );
+}
+
+function countSelectedDays(
+  rows: { selected_days: number[] | null }[] | null | undefined
+): number {
+  return (rows ?? []).reduce(
+    (sum, row) => sum + ((row.selected_days ?? []).length),
+    0
+  );
+}
+
+function expandDeliveryRowsToDateStrings(
+  rows: { week_start: string; selected_days: number[] | null }[] | null | undefined
+): string[] {
+  const dates: string[] = [];
+  for (const row of rows ?? []) {
+    const weekStart = new Date(row.week_start + "T00:00:00");
+    for (const dayOfWeek of row.selected_days ?? []) {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + dayOfWeek - 1);
+      dates.push(formatDateISO(date));
+    }
+  }
+  return dates.sort();
+}
+
+async function periodHasStoreClosure(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  period: SubscriptionWithPeriod["subscription_periods"]
+): Promise<boolean> {
+  if (!period?.delivery_start || !period.delivery_end) return false;
+  const { data } = await supabase
+    .from("store_closures")
+    .select("id")
+    .gte("closure_date", period.delivery_start)
+    .lte("closure_date", period.delivery_end)
+    .limit(1);
+  return (data?.length ?? 0) > 0;
+}
+
+async function getUnresolvedCarryoverReplacement(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  targetPeriodId: string,
+  excludeSubscriptionId?: string
+): Promise<CarryoverReplacement | null> {
+  const { data: targetPeriod } = await supabase
+    .from("subscription_periods")
+    .select("id, target_month, delivery_start, delivery_end")
+    .eq("id", targetPeriodId)
+    .maybeSingle();
+  if (!targetPeriod?.delivery_start || !targetPeriod.delivery_end) return null;
+
+  const { data: subs } = await supabase
+    .from("subscriptions")
+    .select(
+      "id, user_id, period_id, frequency_per_week, total_delivery_days, payment_status, closure_reselection_required, subscription_periods(target_month, delivery_start, delivery_end)"
+    )
+    .eq("user_id", userId)
+    .eq("payment_status", "completed");
+
+  const candidates = ((subs ?? []) as unknown as SubscriptionWithPeriod[])
+    .filter((sub) => {
+      const deliveryStart = sub.subscription_periods?.delivery_start;
+      return (
+        sub.id !== excludeSubscriptionId &&
+        sub.period_id !== targetPeriodId &&
+        !!deliveryStart &&
+        deliveryStart < targetPeriod.delivery_start
+      );
+    })
+    .sort((a, b) =>
+      (b.subscription_periods?.delivery_start ?? "").localeCompare(
+        a.subscription_periods?.delivery_start ?? ""
+      )
+    );
+
+  for (const sub of candidates) {
+    const [{ data: deliveryRows }, { data: usedRows }] = await Promise.all([
+      supabase
+        .from("delivery_days")
+        .select("week_start, selected_days")
+        .eq("subscription_id", sub.id),
+      supabase
+        .from("subscriptions")
+        .select("id, carryover_delivery_days")
+        .eq("user_id", userId)
+        .eq("carryover_from_subscription_id", sub.id),
+    ]);
+
+    const deliveryDates = expandDeliveryRowsToDateStrings(
+      deliveryRows as
+        | { week_start: string; selected_days: number[] | null }[]
+        | null
+    );
+    const selectedCount = deliveryDates.length;
+    const usedDates = deliveryDates.filter(
+      (date) =>
+        date >= targetPeriod.delivery_start &&
+        date <= targetPeriod.delivery_end
+    );
+    const remaining = Math.max(0, getEffectiveTotalDays(sub) - selectedCount);
+
+    const usedByOtherSubscriptions = ((usedRows ?? []) as CarryoverUsageRow[])
+      .filter((row) => row.id !== excludeSubscriptionId)
+      .reduce(
+        (sum, row) => sum + (row.carryover_delivery_days ?? 0),
+        0
+      );
+    const available = Math.max(0, remaining - usedByOtherSubscriptions);
+    if (available <= 0 && usedDates.length === 0) continue;
+
+    const hasClosure = await periodHasStoreClosure(
+      supabase,
+      sub.subscription_periods
+    );
+    const isClosureReplacement =
+      sub.closure_reselection_required === true || (hasClosure && selectedCount > 0);
+    if (!isClosureReplacement) continue;
+
+    return {
+      sourceSubscriptionId: sub.id,
+      availableDays: available,
+      targetMonth: sub.subscription_periods?.target_month ?? "",
+      usedDates,
+    };
+  }
+
+  return null;
+}
+
+export async function getMyCarryoverReplacement(
+  periodId: string
+): Promise<CarryoverReplacement | null> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return null;
+
+  const { data: existing } = await supabase
+    .from("subscriptions")
+    .select("id, carryover_delivery_days, carryover_from_subscription_id")
+    .eq("user_id", user.id)
+    .eq("period_id", periodId)
+    .maybeSingle();
+
+  if (
+    existing?.carryover_from_subscription_id &&
+    ((existing.carryover_delivery_days as number | null) ?? 0) > 0
+  ) {
+    return {
+      sourceSubscriptionId: existing.carryover_from_subscription_id as string,
+      availableDays: (existing.carryover_delivery_days as number | null) ?? 0,
+      targetMonth: "",
+      usedDates: [],
+    };
+  }
+
+  return getUnresolvedCarryoverReplacement(
+    supabase,
+    user.id,
+    periodId,
+    existing?.id as string | undefined
+  );
+}
+
 export async function createOrUpdateSubscription(
   periodId: string,
   frequency: number,
   saladsPerDelivery: number,
-  totalDeliveryDays?: number
+  totalDeliveryDays?: number,
+  carryoverDeliveryDays = 0,
+  carryoverFromSubscriptionId?: string | null
 ): Promise<ActionResult & { subscriptionId?: string }> {
   const supabase = await createClient();
   const user = await getAuthUser();
@@ -239,12 +462,45 @@ export async function createOrUpdateSubscription(
     return { error: "PERIOD_CLOSED" };
   }
 
+  const normalizedCarryoverDays = Math.max(0, carryoverDeliveryDays);
+
   const { data: existing } = await supabase
     .from("subscriptions")
-    .select("id")
+    .select("id, carryover_delivery_days, carryover_from_subscription_id")
     .eq("user_id", user.id)
     .eq("period_id", periodId)
     .single();
+  const existingCarryover = existing as ExistingCarryoverSubscription | null;
+
+  if (normalizedCarryoverDays > 0) {
+    if (!carryoverFromSubscriptionId) {
+      return { error: "사용할 수 있는 휴무 보상일이 없습니다" };
+    }
+
+    const existingCarryoverDays =
+      existingCarryover?.carryover_delivery_days ?? 0;
+    const isAlreadyStoredCarryover =
+      existingCarryover?.carryover_from_subscription_id ===
+        carryoverFromSubscriptionId &&
+      normalizedCarryoverDays <= existingCarryoverDays;
+
+    if (!isAlreadyStoredCarryover) {
+      const availableCarryover = await getUnresolvedCarryoverReplacement(
+        supabase,
+        user.id,
+        periodId,
+        existingCarryover?.id
+      );
+
+      if (
+        !availableCarryover ||
+        availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
+        normalizedCarryoverDays > availableCarryover.availableDays
+      ) {
+        return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
+      }
+    }
+  }
 
   if (existing) {
     const updateData: Record<string, unknown> = {
@@ -252,6 +508,9 @@ export async function createOrUpdateSubscription(
       salads_per_delivery: saladsPerDelivery,
       payment_method: null,
       payment_status: "pending",
+      carryover_delivery_days: normalizedCarryoverDays,
+      carryover_from_subscription_id:
+        normalizedCarryoverDays > 0 ? carryoverFromSubscriptionId : null,
     };
     if (totalDeliveryDays !== undefined) {
       updateData.total_delivery_days = totalDeliveryDays;
@@ -263,6 +522,17 @@ export async function createOrUpdateSubscription(
       .eq("id", existing.id);
 
     if (error) return { error: error.message };
+
+    if (
+      normalizedCarryoverDays === 0 &&
+      existingCarryover?.carryover_from_subscription_id
+    ) {
+      await supabase
+        .from("subscriptions")
+        .update({ closure_reselection_required: true })
+        .eq("id", existingCarryover.carryover_from_subscription_id)
+        .eq("user_id", user.id);
+    }
 
     revalidatePath("/subscription");
     revalidatePath("/delivery");
@@ -278,6 +548,9 @@ export async function createOrUpdateSubscription(
         frequency_per_week: frequency,
         salads_per_delivery: saladsPerDelivery,
         total_delivery_days: totalDeliveryDays ?? null,
+        carryover_delivery_days: normalizedCarryoverDays,
+        carryover_from_subscription_id:
+          normalizedCarryoverDays > 0 ? carryoverFromSubscriptionId : null,
         payment_status: "pending",
       })
       .select("id")
@@ -291,6 +564,73 @@ export async function createOrUpdateSubscription(
     revalidatePath("/admin/subscription-status");
     return { success: true, subscriptionId: inserted.id };
   }
+}
+
+export async function resolveCarryoverReplacement(
+  subscriptionId: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return { error: "AUTH_REQUIRED" };
+
+  const { data: sub } = await supabase
+    .from("subscriptions")
+    .select("carryover_delivery_days, carryover_from_subscription_id")
+    .eq("id", subscriptionId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const sourceId = sub?.carryover_from_subscription_id as string | null;
+  const carryoverDays = (sub?.carryover_delivery_days as number | null) ?? 0;
+  if (!sourceId || carryoverDays <= 0) return { success: true };
+
+  const [{ data: sourceSub }, { data: sourceDeliveryRows }, { data: usedRows }] =
+    await Promise.all([
+      supabase
+        .from("subscriptions")
+        .select("frequency_per_week, total_delivery_days")
+        .eq("id", sourceId)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("delivery_days")
+        .select("selected_days")
+        .eq("subscription_id", sourceId),
+      supabase
+        .from("subscriptions")
+        .select("carryover_delivery_days")
+        .eq("user_id", user.id)
+        .eq("carryover_from_subscription_id", sourceId),
+    ]);
+
+  if (!sourceSub) return { success: true };
+
+  const requiredCount = getEffectiveTotalDays({
+    frequency_per_week: (sourceSub.frequency_per_week as number | null) ?? 0,
+    total_delivery_days: sourceSub.total_delivery_days as number | null,
+  });
+  const selectedCount = countSelectedDays(
+    sourceDeliveryRows as { selected_days: number[] | null }[] | null
+  );
+  const usedCarryoverCount = ((usedRows ?? []) as {
+    carryover_delivery_days: number | null;
+  }[]).reduce((sum, row) => sum + (row.carryover_delivery_days ?? 0), 0);
+  const stillNeedsReplacement =
+    Math.max(0, requiredCount - selectedCount - usedCarryoverCount) > 0;
+
+  const { error } = await supabase
+    .from("subscriptions")
+    .update({ closure_reselection_required: stillNeedsReplacement })
+    .eq("id", sourceId)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/subscription");
+  revalidatePath("/delivery");
+  revalidatePath("/");
+  revalidatePath("/admin/subscription-status");
+  return { success: true };
 }
 
 export async function updatePaymentAndMarkPaid(
@@ -485,6 +825,56 @@ export async function adminAddSubscription(
   }
 
   revalidatePath("/", "layout");
+  return { success: true };
+}
+
+export async function adminDeleteSubscription(
+  subscriptionId: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return { error: "Unauthorized" };
+
+  const { data: adminProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (!adminProfile?.role || !["admin", "super_admin"].includes(adminProfile.role)) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const admin = createAdminClient();
+  const { data: sub } = await admin
+    .from("subscriptions")
+    .select("id, user_id, subscription_periods(delivery_start, delivery_end)")
+    .eq("id", subscriptionId)
+    .maybeSingle();
+
+  if (!sub) return { error: "구독을 찾을 수 없습니다" };
+
+  const period = (sub as any).subscription_periods;
+  if (period?.delivery_start && period?.delivery_end) {
+    await admin
+      .from("user_menu_selections")
+      .delete()
+      .eq("user_id", (sub as any).user_id)
+      .gte("delivery_date", period.delivery_start)
+      .lte("delivery_date", period.delivery_end);
+  }
+
+  const { error } = await admin
+    .from("subscriptions")
+    .delete()
+    .eq("id", subscriptionId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  revalidatePath("/admin/subscriptions");
+  revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/reports");
   return { success: true };
 }
 

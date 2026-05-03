@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import {
   getMenuSelectionCutoff,
+  getWeeklyMenuDeadlines,
   getVendorReport,
   type VendorReportRow,
 } from "@/lib/actions/admin";
@@ -62,6 +63,7 @@ export function VendorReportView() {
     day: 4,
     time: "23:59",
   });
+  const [deadlineOverrides, setDeadlineOverrides] = useState<Record<string, string>>({});
 
   // Cutoff is global admin config; fetch once on mount.
   useEffect(() => {
@@ -79,9 +81,15 @@ export function VendorReportView() {
     async function load() {
       setIsLoading(true);
       const { start, end } = getMonthRange(year, month);
-      const data = await getVendorReport(start, end);
+      const [data, deadlines] = await Promise.all([
+        getVendorReport(start, end),
+        getWeeklyMenuDeadlines(getMondayISO(start), end),
+      ]);
       if (!cancelled) {
         setRows(data);
+        setDeadlineOverrides(
+          Object.fromEntries(deadlines.map((d) => [d.week_start, d.deadline_at]))
+        );
         setIsLoading(false);
       }
     }
@@ -96,10 +104,16 @@ export function VendorReportView() {
   const rowStatus = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const r of rows) {
-      m.set(r.date, isSelectionClosed(r.date, cutoff.day, cutoff.time));
+      const override = deadlineOverrides[getMondayISO(r.date)];
+      m.set(
+        r.date,
+        override
+          ? new Date() >= new Date(override)
+          : isSelectionClosed(r.date, cutoff.day, cutoff.time)
+      );
     }
     return m;
-  }, [rows, cutoff.day, cutoff.time]);
+  }, [rows, cutoff.day, cutoff.time, deadlineOverrides]);
 
   function goToPrevMonth() {
     if (month === 1) {

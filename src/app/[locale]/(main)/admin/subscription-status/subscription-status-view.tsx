@@ -346,6 +346,15 @@ function MonthCalendar({
     () => new Map(holidays.map((h) => [h.holiday_date, h.name])),
     [holidays]
   );
+  const storeClosureSet = useMemo(
+    () =>
+      new Set(
+        holidays
+          .filter((h) => h.source === "store_closure")
+          .map((h) => h.holiday_date)
+      ),
+    [holidays]
+  );
 
   const deliveryStartDate = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
@@ -521,6 +530,7 @@ function MonthCalendar({
               const count = counts[dateStr] || 0;
               const isHoliday = holidaySet.has(dateStr);
               const hName = holidayMap.get(dateStr);
+              const isStoreClosure = storeClosureSet.has(dateStr);
               const outOfRange = isOutOfRange(i);
               const isToday = dateStr === todayStr;
               const clickable = count > 0 && !isHoliday && !outOfRange;
@@ -535,8 +545,10 @@ function MonthCalendar({
                   onClick={() => clickable && handleDateClick(dateStr, count)}
                   disabled={!clickable}
                   className={`relative flex flex-col items-center gap-1 rounded-xl border-2 p-3 transition-all ${
-                    isHoliday
-                      ? "border-red-200 bg-red-50 text-red-400 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-500"
+                    isStoreClosure
+                      ? "border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-900/50 dark:bg-amber-900/10 dark:text-amber-500"
+                      : isHoliday
+                        ? "border-red-200 bg-red-50 text-red-400 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-500"
                       : outOfRange
                         ? "border-muted bg-muted/30 text-muted-foreground opacity-50"
                         : isSelected
@@ -1143,6 +1155,10 @@ export function SubscriptionStatusView({
             <span className="flex items-center gap-1">
               <span className="h-3 w-3 rounded border-2 border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20" />
               공휴일
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded border-2 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20" />
+              매장 휴무
             </span>
           </div>
         </>

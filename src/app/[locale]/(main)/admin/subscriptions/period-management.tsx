@@ -28,6 +28,7 @@ import {
   adminUpdateSubscriptionPayment,
   getSubscriptionSummaryText,
   adminAddSubscription,
+  adminDeleteSubscription,
 } from "@/lib/actions/subscription";
 import { getCompanyUsers } from "@/lib/actions/admin";
 import { adminGetDeliveryDates, adminUpdateDeliveryDates } from "@/lib/actions/delivery";
@@ -208,6 +209,25 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
     toast.success(
       status === "completed" ? "결제 완료 처리" : "결제 상태 변경"
     );
+  }
+
+  async function handleDeleteSubscriber(sub: SubscriberRow) {
+    const name = sub.profiles?.real_name || sub.profiles?.nickname || "사용자";
+    if (
+      !window.confirm(
+        `${name}님의 이번 기간 구독을 삭제할까요?\n배달 날짜와 메뉴 선택도 함께 삭제됩니다.`
+      )
+    ) {
+      return;
+    }
+
+    const result = await adminDeleteSubscription(sub.id);
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    setSubscribers((prev) => prev.filter((s) => s.id !== sub.id));
+    toast.success("구독에서 삭제되었습니다");
   }
 
   async function openAddSubDialog(periodId: string) {
@@ -622,6 +642,14 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                     >
                                       <Pencil className="h-3.5 w-3.5" />
                                     </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="text-destructive hover:text-destructive"
+                                      onClick={() => handleDeleteSubscriber(sub)}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
                                   </div>
                                 </div>
 
@@ -738,28 +766,30 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
 
                                         return (
                                           <>
-                                            <Calendar
-                                              defaultMonth={start}
-                                              disabled={[
-                                                { before: start },
-                                                { after: end },
-                                                { dayOfWeek: [0, 6] },
-                                              ]}
-                                              modifiers={{
-                                                selected: editSubDates,
-                                                holiday: holidays.map((h) => new Date(h + "T00:00:00")),
-                                              }}
-                                              modifiersClassNames={{
-                                                selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
-                                                holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
-                                              }}
-                                              classNames={{ root: "w-full" }}
-                                              onDayClick={(day) => toggleDate(day)}
-                                              className="rounded-md border"
-                                            />
+                                            <div className="overflow-hidden rounded-md border pb-2">
+                                              <Calendar
+                                                defaultMonth={start}
+                                                disabled={[
+                                                  { before: start },
+                                                  { after: end },
+                                                  { dayOfWeek: [0, 6] },
+                                                ]}
+                                                modifiers={{
+                                                  selected: editSubDates,
+                                                  holiday: holidays.map((h) => new Date(h + "T00:00:00")),
+                                                }}
+                                                modifiersClassNames={{
+                                                  selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
+                                                  holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
+                                                }}
+                                                classNames={{ root: "w-full" }}
+                                                onDayClick={(day) => toggleDate(day)}
+                                                className="w-full max-w-full [--cell-size:clamp(2rem,11vw,2.25rem)]"
+                                              />
+                                            </div>
                                             <Button
                                               size="sm"
-                                              className="w-full h-8 text-xs"
+                                              className="mt-3 w-full h-8 text-xs"
                                               disabled={savingDates}
                                               onClick={async () => {
                                                 setSavingDates(true);
@@ -1129,25 +1159,27 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
               return (
                 <div className="space-y-2">
                   <Label>배달 날짜 ({addSubDates.length}일 선택)</Label>
-                  <Calendar
-                    defaultMonth={start}
-                    disabled={[
-                      { before: start },
-                      { after: end },
-                      { dayOfWeek: [0, 6] },
-                    ]}
-                    modifiers={{
-                      selected: addSubDates,
-                      holiday: holidays.map((h) => new Date(h + "T00:00:00")),
-                    }}
-                    modifiersClassNames={{
-                      selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
-                      holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
-                    }}
-                    classNames={{ root: "w-full" }}
-                    onDayClick={(day) => toggleDate(day)}
-                    className="rounded-md border"
-                  />
+                  <div className="overflow-hidden rounded-md border pb-2">
+                    <Calendar
+                      defaultMonth={start}
+                      disabled={[
+                        { before: start },
+                        { after: end },
+                        { dayOfWeek: [0, 6] },
+                      ]}
+                      modifiers={{
+                        selected: addSubDates,
+                        holiday: holidays.map((h) => new Date(h + "T00:00:00")),
+                      }}
+                      modifiersClassNames={{
+                        selected: "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
+                        holiday: "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
+                      }}
+                      classNames={{ root: "w-full" }}
+                      onDayClick={(day) => toggleDate(day)}
+                      className="w-full max-w-full [--cell-size:clamp(2rem,11vw,2.25rem)]"
+                    />
+                  </div>
                   <div className="flex items-center gap-4 text-xs text-muted-foreground">
                     <span className="flex items-center gap-1.5">
                       <span className="inline-block size-3 rounded-full bg-blue-100 dark:bg-blue-900/30" />

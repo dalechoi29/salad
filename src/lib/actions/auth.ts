@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import {
   createAdminClient,
   createClient,
@@ -214,7 +215,7 @@ export async function changePassword(
   return { success: true };
 }
 
-export async function getCurrentProfile() {
+const getCurrentProfileCached = cache(async () => {
   const supabase = await createClient();
 
   const user = await getAuthUser();
@@ -228,4 +229,8 @@ export async function getCurrentProfile() {
     .single();
 
   return profile;
+});
+
+export async function getCurrentProfile() {
+  return getCurrentProfileCached();
 }

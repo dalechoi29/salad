@@ -16,11 +16,10 @@ import {
   Loader2,
   Check,
   Save,
-  Zap,
   Home,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import { formatDateISO } from "@/lib/utils";
+import { formatDateISO, isSelectionClosed } from "@/lib/utils";
 import type { Subscription, DeliveryDay, Holiday } from "@/types";
 
 interface DeliveryDaySelectorProps {
@@ -30,36 +29,15 @@ interface DeliveryDaySelectorProps {
   periodMonth: string;
   deliveryStart: string | null;
   deliveryEnd: string | null;
+  replacementMode?: boolean;
+  remainingSlots?: number;
+  cutoffDay?: number;
+  cutoffTime?: string;
+  deadlineOverrides?: Record<string, string>;
 }
 
 const DAY_LABELS = ["월", "화", "수", "목", "금"];
 const WEEKS_PER_MONTH = 4;
-
-const PRESETS: Record<number, { label: string; days: number[] }[]> = {
-  1: [
-    { label: "매주 월", days: [1] },
-    { label: "매주 화", days: [2] },
-    { label: "매주 수", days: [3] },
-    { label: "매주 목", days: [4] },
-    { label: "매주 금", days: [5] },
-  ],
-  2: [
-    { label: "매주 화/목", days: [2, 4] },
-    { label: "매주 월/수", days: [1, 3] },
-    { label: "매주 수/금", days: [3, 5] },
-    { label: "매주 월/목", days: [1, 4] },
-  ],
-  3: [
-    { label: "매주 월/수/금", days: [1, 3, 5] },
-    { label: "매주 화/목/금", days: [2, 4, 5] },
-    { label: "매주 월/화/목", days: [1, 2, 4] },
-  ],
-  4: [
-    { label: "매주 월/화/목/금", days: [1, 2, 4, 5] },
-    { label: "매주 월/수/목/금", days: [1, 3, 4, 5] },
-  ],
-  5: [{ label: "매주 월~금", days: [1, 2, 3, 4, 5] }],
-};
 
 function getMonday(date: Date): Date {
   const d = new Date(date);
@@ -92,6 +70,11 @@ export function DeliveryDaySelector({
   periodMonth,
   deliveryStart,
   deliveryEnd,
+  replacementMode = false,
+  remainingSlots = 0,
+  cutoffDay = 4,
+  cutoffTime = "23:59",
+  deadlineOverrides = {},
 }: DeliveryDaySelectorProps) {
   const maxDays = subscription.frequency_per_week;
 
@@ -99,7 +82,10 @@ export function DeliveryDaySelector({
     () => deliveryDays.reduce((sum, d) => sum + d.selected_days.length, 0),
     [deliveryDays]
   );
-  const appliedTotal = subscription.total_delivery_days ?? initialSavedTotal;
+  const appliedTotal =
+    ((subscription.total_delivery_days ?? 0) ||
+      subscription.frequency_per_week * WEEKS_PER_MONTH ||
+      initialSavedTotal) + (subscription.carryover_delivery_days ?? 0);
 
   const deliveryStartDate = deliveryStart
     ? new Date(deliveryStart + "T00:00:00")
@@ -113,15 +99,30 @@ export function DeliveryDaySelector({
     : null;
   const lastMonday = deliveryEndDate ? getMonday(deliveryEndDate) : null;
 
-  const initialMonday = deliveryStartDate
-    ? getMonday(deliveryStartDate)
-    : getMonday(new Date());
+  const initialMonday = (() => {
+    const today = new Date();
+    if (replacementMode) {
+      if (deliveryStartDate && today < deliveryStartDate) {
+        return getMonday(deliveryStartDate);
+      }
+      if (deliveryEndDate && today > deliveryEndDate) {
+        return getMonday(deliveryEndDate);
+      }
+      return getMonday(today);
+    }
+    return deliveryStartDate ? getMonday(deliveryStartDate) : getMonday(today);
+  })();
 
   const [currentMonday, setCurrentMonday] = useState(initialMonday);
   const [isLoading, setIsLoading] = useState(false);
 
   const holidaySet = new Set(holidays.map((h) => h.holiday_date));
   const holidayMap = new Map(holidays.map((h) => [h.holiday_date, h.name]));
+  const storeClosureSet = new Set(
+    holidays
+      .filter((h) => h.source === "store_closure")
+      .map((h) => h.holiday_date)
+  );
 
   const savedMap = useMemo(() => {
     const map: Record<string, number[]> = {};
@@ -207,6 +208,17 @@ export function DeliveryDaySelector({
     return holidayMap.get(formatDateISO(date));
   }
 
+  function getWeekStartISO(dateStr: string): string {
+    const d = new Date(dateStr + "T00:00:00");
+    return formatDateISO(getMonday(d));
+  }
+
+  function isDateCutoffClosed(dateStr: string): boolean {
+    const override = deadlineOverrides[getWeekStartISO(dateStr)];
+    if (override) return new Date() >= new Date(override);
+    return isSelectionClosed(dateStr, cutoffDay, cutoffTime);
+  }
+
   function getGlobalTotal(selections: Record<string, number[]>): number {
     let count = 0;
     for (const days of Object.values(selections)) {
@@ -233,42 +245,6 @@ export function DeliveryDaySelector({
       }
       return { ...prev, [weekStartStr]: [...current, day].sort() };
     });
-  }
-
-  function applyPreset(presetDays: number[]) {
-    if (!firstMonday || !lastMonday) return;
-
-    const newSelections: Record<string, number[]> = {};
-    let total = 0;
-
-    const cursor = new Date(firstMonday);
-    while (cursor <= lastMonday) {
-      const weekStr = formatDateISO(cursor);
-      const validDays: number[] = [];
-
-      for (const day of presetDays) {
-        if (appliedTotal > 0 && total >= appliedTotal) break;
-
-        const date = new Date(cursor);
-        date.setDate(date.getDate() + day - 1);
-
-        if (deliveryStartDate && date < deliveryStartDate) continue;
-        if (deliveryEndDate && date > deliveryEndDate) continue;
-        if (holidaySet.has(formatDateISO(date))) continue;
-
-        validDays.push(day);
-        total++;
-      }
-
-      if (validDays.length > 0) {
-        newSelections[weekStr] = validDays;
-      }
-
-      cursor.setDate(cursor.getDate() + 7);
-    }
-
-    setWeekSelections(newSelections);
-    toast.success(`${total}일 자동 선택됨`);
   }
 
   const canGoPrev = firstMonday ? currentMonday > firstMonday : true;
@@ -321,54 +297,10 @@ export function DeliveryDaySelector({
     }
   }
 
+  const todayIso = formatDateISO(new Date());
   const isPastWeek = currentMonday < getMonday(new Date());
-  const presets = PRESETS[maxDays] ?? [];
   const appliedSalads = appliedTotal * subscription.salads_per_delivery;
   const isFull = totalSelectedDays >= appliedTotal;
-
-  const activePresetLabel = useMemo(() => {
-    if (!firstMonday || !lastMonday) return null;
-
-    for (const preset of presets) {
-      const expectedSelections: Record<string, number[]> = {};
-      const cursor = new Date(firstMonday);
-      while (cursor <= lastMonday) {
-        const weekStr = formatDateISO(cursor);
-        const validDays: number[] = [];
-        for (const day of preset.days) {
-          const date = new Date(cursor);
-          date.setDate(date.getDate() + day - 1);
-          if (deliveryStartDate && date < deliveryStartDate) continue;
-          if (deliveryEndDate && date > deliveryEndDate) continue;
-          if (holidaySet.has(formatDateISO(date))) continue;
-          validDays.push(day);
-        }
-        if (validDays.length > 0) {
-          expectedSelections[weekStr] = validDays;
-        }
-        cursor.setDate(cursor.getDate() + 7);
-      }
-
-      const allKeys = new Set([
-        ...Object.keys(weekSelections),
-        ...Object.keys(expectedSelections),
-      ]);
-      let matches = true;
-      for (const key of allKeys) {
-        const current = (weekSelections[key] ?? []).slice().sort((a, b) => a - b);
-        const expected = (expectedSelections[key] ?? []).slice().sort((a, b) => a - b);
-        if (
-          current.length !== expected.length ||
-          current.some((d, i) => d !== expected[i])
-        ) {
-          matches = false;
-          break;
-        }
-      }
-      if (matches) return preset.label;
-    }
-    return null;
-  }, [weekSelections, presets, firstMonday, lastMonday, deliveryStartDate, deliveryEndDate, holidaySet]);
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -392,6 +324,14 @@ export function DeliveryDaySelector({
           )}
         </p>
       </div>
+
+      {replacementMode && remainingSlots > 0 && (
+        <Card className="border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40">
+          <CardContent className="py-3 text-sm text-amber-800 dark:text-amber-300">
+            선택한 날짜에 매장이 잠시 쉬어가요. {remainingSlots}일을 다시 선택할 수 있어요.
+          </CardContent>
+        </Card>
+      )}
 
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3">
@@ -420,31 +360,6 @@ export function DeliveryDaySelector({
           </CardContent>
         </Card>
       </div>
-
-      {/* Quick Presets */}
-      {presets.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Zap className="h-3.5 w-3.5" />
-            <span>빠른 선택</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {presets.map((preset) => (
-              <button
-                key={preset.label}
-                onClick={() => applyPreset(preset.days)}
-                className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                  activePresetLabel === preset.label
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "hover:bg-primary/10 hover:border-primary/30 hover:text-primary"
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Week Navigator */}
       <Card>
@@ -477,11 +392,15 @@ export function DeliveryDaySelector({
               const dayNum = i + 1;
               const holiday = isDayHoliday(i);
               const outOfRange = isOutOfRange(i);
-              const disabled = holiday || isPastWeek || outOfRange;
               const selected = currentSelection.includes(dayNum);
               const dateObj = getDateForDay(i);
               const dateNum = dateObj.getDate();
               const hName = getHolidayName(i);
+              const dateStr = formatDateISO(dateObj);
+              const isStoreClosure = storeClosureSet.has(dateStr);
+              const isPastDate = dateStr < todayIso;
+              const cutoffClosed = isDateCutoffClosed(dateStr);
+              const disabled = holiday || isPastDate || outOfRange || cutoffClosed;
 
               return (
                 <button
@@ -489,9 +408,11 @@ export function DeliveryDaySelector({
                   onClick={() => !disabled && toggleDay(i)}
                   disabled={disabled}
                   className={`relative flex flex-col items-center gap-1 rounded-xl border-2 p-3 transition-all overflow-hidden ${
-                    holiday
-                      ? "border-red-200 bg-red-50 text-red-400 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-500"
-                      : outOfRange || isPastWeek
+                    isStoreClosure
+                      ? "border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-900/50 dark:bg-amber-900/10 dark:text-amber-500"
+                      : holiday
+                        ? "border-red-200 bg-red-50 text-red-400 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-500"
+                      : outOfRange || isPastDate || cutoffClosed
                         ? "border-muted bg-muted/30 text-muted-foreground opacity-50"
                         : selected
                           ? "border-primary bg-primary/10 text-primary"
@@ -503,6 +424,10 @@ export function DeliveryDaySelector({
                   {holiday && hName ? (
                     <span className="w-full text-[9px] leading-tight text-center truncate">
                       {hName}
+                    </span>
+                  ) : cutoffClosed ? (
+                    <span className="w-full text-[9px] leading-tight text-center truncate">
+                      마감
                     </span>
                   ) : selected ? (
                     <Check className="h-3.5 w-3.5" />
@@ -553,6 +478,10 @@ export function DeliveryDaySelector({
         <span className="flex items-center gap-1">
           <span className="h-3 w-3 rounded border-2 border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20" />
           공휴일
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-3 w-3 rounded border-2 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20" />
+          매장 휴무
         </span>
         <span className="flex items-center gap-1">
           <span className="h-3 w-3 rounded border-2 border-muted bg-background" />

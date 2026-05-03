@@ -19,12 +19,13 @@ import {
   getMySubscriptions,
   getSubscriptionPeriods,
 } from "@/lib/actions/subscription";
-import { getMyDeliveryDays } from "@/lib/actions/delivery";
-import { deliveryDaysToDateStrings, getTodayStr, getKSTDate, countSelectedDays, formatDateFull } from "@/lib/utils";
+import { getMyDeliveryDaysBySubscriptionIds } from "@/lib/actions/delivery";
+import { deliveryDaysToDateStrings, getTodayStr, getKSTDate, countSelectedDays, formatDateFull, isSelectionClosed } from "@/lib/utils";
 import { getDailyMenusByDate, getMyMenuSelections } from "@/lib/actions/menu";
-import { getPickupStreak, getMyPickups } from "@/lib/actions/pickup";
-import { getSubscriptionDayCounts, getDailySaladStatus, getCompanyUsers } from "@/lib/actions/admin";
+import { getMyPickups } from "@/lib/actions/pickup";
+import { getSubscriptionDayCounts, getDailySaladStatus, getCompanyUsers, getMenuSelectionCutoff, getWeeklyMenuDeadlines } from "@/lib/actions/admin";
 import { getHolidays } from "@/lib/actions/holiday";
+import { getStoreClosures } from "@/lib/actions/store-closure";
 import { Link } from "@/i18n/navigation";
 import { HomePickupCard } from "./home-pickup-card";
 import { HomeFridgeCard } from "./home-fridge-card";
@@ -50,6 +51,37 @@ function findCurrentSubscription(
   return subscriptions[0] ?? null;
 }
 
+function getMondayISO(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = d.getDay();
+  const diff = dow === 0 ? 6 : dow - 1;
+  d.setDate(d.getDate() - diff);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+type SubscriptionWithPeriod = Subscription & {
+  subscription_periods?: SubscriptionPeriod | null;
+};
+
+function getEffectiveTotalDays(subscription: Subscription): number {
+  return (
+    (subscription.total_delivery_days ?? 0) ||
+    (subscription.frequency_per_week ?? 0) * 4
+  );
+}
+
+function hasClosureInPeriod(
+  period: SubscriptionPeriod | null | undefined,
+  closures: { closure_date: string }[]
+): boolean {
+  if (!period?.delivery_start || !period.delivery_end) return false;
+  const start = period.delivery_start.slice(0, 10);
+  const end = period.delivery_end.slice(0, 10);
+  return closures.some(
+    (closure) => closure.closure_date >= start && closure.closure_date <= end
+  );
+}
+
 export default function HomePage() {
   return (
     <Suspense fallback={<HomeSkeleton />}>
@@ -67,11 +99,21 @@ async function SubscriptionStatusSection() {
   const curMonthStr = `${cy}년 ${cm}월`;
   const nxtMonthStr = `${ny}년 ${nm}월`;
 
-  const [allPeriods, hols, profile] = await Promise.all([
+  const [allPeriods, hols, storeClosures, profile] = await Promise.all([
     getSubscriptionPeriods(),
     getHolidays(),
+    getStoreClosures(),
     getCurrentProfile(),
   ]);
+  const blockedDays = [
+    ...hols,
+    ...storeClosures.map((closure) => ({
+      id: closure.id,
+      holiday_date: closure.closure_date,
+      name: closure.reason || "매장 휴무",
+      source: "store_closure" as const,
+    })),
+  ];
 
   const curPeriod = allPeriods.find((p) => p.target_month === curMonthStr) ?? null;
   const nxtPeriod = allPeriods.find((p) => p.target_month === nxtMonthStr) ?? null;
@@ -87,7 +129,7 @@ async function SubscriptionStatusSection() {
       nextPeriod={nxtPeriod}
       currentCounts={cc}
       nextCounts={nc}
-      holidays={hols}
+      holidays={blockedDays}
       showBackButton={false}
       showTitle
       isLoggedIn={!!profile}
@@ -100,13 +142,13 @@ async function HomePageContent() {
   const kstNow = getKSTDate();
   const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
 
-  // Single parallel batch for all independent data
+  // Single parallel batch for independent data. Weekend-only views don't need
+  // the daily menu/pickup/status queries that only affect delivery-day UI.
   const [
     profile,
     period,
     allSubscriptions,
     todayMenus,
-    streak,
     todayPickups,
     todaySelections,
     saladStatus,
@@ -114,21 +156,19 @@ async function HomePageContent() {
     getCurrentProfile(),
     getActivePeriod(),
     getMySubscriptions(),
-    getDailyMenusByDate(todayStr),
-    getPickupStreak(),
-    getMyPickups(todayStr, todayStr),
-    getMyMenuSelections(todayStr, todayStr),
-    getDailySaladStatus(todayStr),
+    isWeekday ? getDailyMenusByDate(todayStr) : [],
+    isWeekday ? getMyPickups(todayStr, todayStr) : [],
+    isWeekday ? getMyMenuSelections(todayStr, todayStr) : [],
+    isWeekday ? getDailySaladStatus(todayStr) : null,
   ]);
 
   const subscription = findCurrentSubscription(allSubscriptions, todayStr);
   const isAdmin = profile?.role === "admin" || profile?.role === "super_admin";
 
   // Second batch: all dependent fetches in parallel
-  const [periodSubscription, deliveryDays, companyUsers] = await Promise.all([
+  const [periodSubscription, storeClosures] = await Promise.all([
     period ? getMySubscription(period.id) : null,
-    subscription ? getMyDeliveryDays(subscription.id) : [],
-    isAdmin ? getCompanyUsers() : [],
+    getStoreClosures(),
   ]);
 
   // For the "paid but haven't finished picking dates" CTA, we need the
@@ -136,12 +176,38 @@ async function HomePageContent() {
   // delivering while May is open for payment) periodSubscription and
   // subscription point at different rows; in the common case they match
   // and we reuse `deliveryDays` without an extra query.
-  const periodDeliveryDays =
-    periodSubscription && subscription?.id === periodSubscription.id
-      ? deliveryDays
-      : periodSubscription
-        ? await getMyDeliveryDays(periodSubscription.id)
-        : [];
+  const incompleteClosureCandidates = (
+    allSubscriptions as SubscriptionWithPeriod[]
+  )
+    .map((sub) => {
+      const subPeriod = sub.subscription_periods;
+      return { sub, subPeriod };
+    })
+    .filter(
+      ({ sub, subPeriod }) =>
+        sub.payment_status === "completed" &&
+        hasClosureInPeriod(subPeriod, storeClosures)
+    )
+    .sort((a, b) =>
+      (a.subPeriod?.delivery_start ?? "").localeCompare(
+        b.subPeriod?.delivery_start ?? ""
+      )
+    );
+
+  const deliverySubIds = [
+    subscription?.id,
+    periodSubscription?.id,
+    ...incompleteClosureCandidates.map(({ sub }) => sub.id),
+  ].filter((id): id is string => !!id);
+  const deliveryDaysBySub = await getMyDeliveryDaysBySubscriptionIds(deliverySubIds);
+  const deliveryDays = subscription ? (deliveryDaysBySub[subscription.id] ?? []) : [];
+  const periodDeliveryDays = periodSubscription
+    ? (deliveryDaysBySub[periodSubscription.id] ?? [])
+    : [];
+  const companyUsers =
+    isAdmin && isWeekday && todayMenus.length > 0 && !saladStatus?.is_checked
+      ? await getCompanyUsers()
+      : [];
 
   // Compute the "needs to pick more dates" flag. Same `|| frequency × 4`
   // fallback we use in the admin roster so a subscriber whose row has
@@ -149,19 +215,51 @@ async function HomePageContent() {
   // nags paid subscribers — pending users haven't committed yet.
   let needsMoreDeliveryDates = false;
   let remainingDeliverySlots = 0;
-  if (periodSubscription?.payment_status === "completed") {
-    const storedTotal = periodSubscription.total_delivery_days ?? 0;
-    const frequency = periodSubscription.frequency_per_week ?? 0;
-    const effectiveTotal = storedTotal || frequency * 4;
+  let hasStoreClosureInActivePeriod = false;
+
+  for (const { sub } of incompleteClosureCandidates) {
+    const candidateDays =
+      sub.id === subscription?.id
+        ? deliveryDays
+        : sub.id === periodSubscription?.id
+          ? periodDeliveryDays
+          : (deliveryDaysBySub[sub.id] ?? []);
+    const selectedCount = countSelectedDays(candidateDays);
+    const usedCarryoverDays = (allSubscriptions as Subscription[]).reduce(
+      (sum, other) =>
+        other.carryover_from_subscription_id === sub.id
+          ? sum + ((other.carryover_delivery_days ?? 0) as number)
+          : sum,
+      0
+    );
+    const remaining = Math.max(
+      0,
+      getEffectiveTotalDays(sub) - selectedCount - usedCarryoverDays
+    );
+    const isClosureReplacement =
+      sub.closure_reselection_required === true || selectedCount > 0;
+
+    if (remaining > 0 && isClosureReplacement) {
+      needsMoreDeliveryDates = true;
+      remainingDeliverySlots = remaining;
+      hasStoreClosureInActivePeriod = true;
+      break;
+    }
+  }
+
+  if (!needsMoreDeliveryDates && periodSubscription?.payment_status === "completed") {
+    const effectiveTotal = getEffectiveTotalDays(periodSubscription);
     const selectedCount = countSelectedDays(periodDeliveryDays);
     remainingDeliverySlots = Math.max(0, effectiveTotal - selectedCount);
     needsMoreDeliveryDates = remainingDeliverySlots > 0;
+    hasStoreClosureInActivePeriod = false;
   }
 
   let deliveryDayCount = 0;
   let nextDeliveryDate: string | null = null;
   let nextDeliveryMenus: DailyMenu[] = [];
   let nextDeliverySelection: MenuSelection | null = null;
+  let nextDeliveryMenuSelectionClosed = false;
   let isMyDeliveryDay = false;
 
   if (subscription && deliveryDays.length > 0) {
@@ -172,12 +270,19 @@ async function HomePageContent() {
     const futureDates = myDates.filter((d) => d > todayStr);
     if (futureDates.length > 0) {
       nextDeliveryDate = futureDates[0];
-      const [menus, selections] = await Promise.all([
+      const weekStart = getMondayISO(nextDeliveryDate);
+      const [menus, selections, cutoff, deadlines] = await Promise.all([
         getDailyMenusByDate(nextDeliveryDate),
         getMyMenuSelections(nextDeliveryDate, nextDeliveryDate),
+        getMenuSelectionCutoff(),
+        getWeeklyMenuDeadlines(weekStart, weekStart),
       ]);
       nextDeliveryMenus = menus;
       if (selections.length > 0) nextDeliverySelection = selections[0];
+      const override = deadlines[0]?.deadline_at;
+      nextDeliveryMenuSelectionClosed = override
+        ? new Date() >= new Date(override)
+        : isSelectionClosed(nextDeliveryDate, cutoff.day, cutoff.time);
     }
   }
 
@@ -199,18 +304,20 @@ async function HomePageContent() {
       todayMenus={isWeekday ? todayMenus : []}
       isMyDeliveryDay={isMyDeliveryDay}
       deliveryDayCount={deliveryDayCount}
-      streak={streak}
+      streak={profile?.pickup_streak ?? 0}
       todayStr={todayStr}
       todayConfirmed={todayConfirmed}
       nextDeliveryDate={nextDeliveryDate}
       nextDeliveryMenus={nextDeliveryMenus}
       nextDeliverySelection={nextDeliverySelection}
+      nextDeliveryMenuSelectionClosed={nextDeliveryMenuSelectionClosed}
       todaySelectedMenuName={todaySelectedMenuName}
       saladStatus={saladStatus}
       companyUsers={companyUsers as { id: string; realName: string }[]}
       currentUserName={profile?.real_name ?? ""}
       needsMoreDeliveryDates={needsMoreDeliveryDates}
       remainingDeliverySlots={remainingDeliverySlots}
+      hasStoreClosureInActivePeriod={hasStoreClosureInActivePeriod}
     />
   );
 }
@@ -240,12 +347,14 @@ function HomeContent({
   nextDeliveryDate,
   nextDeliveryMenus,
   nextDeliverySelection,
+  nextDeliveryMenuSelectionClosed,
   todaySelectedMenuName,
   saladStatus,
   companyUsers,
   currentUserName,
   needsMoreDeliveryDates,
   remainingDeliverySlots,
+  hasStoreClosureInActivePeriod,
 }: {
   isLoggedIn: boolean;
   isAdmin: boolean;
@@ -262,12 +371,14 @@ function HomeContent({
   nextDeliveryDate: string | null;
   nextDeliveryMenus: DailyMenu[];
   nextDeliverySelection: MenuSelection | null;
+  nextDeliveryMenuSelectionClosed: boolean;
   todaySelectedMenuName: string | null;
   saladStatus: DailySaladStatus | null;
   companyUsers: { id: string; realName: string }[];
   currentUserName: string;
   needsMoreDeliveryDates: boolean;
   remainingDeliverySlots: number;
+  hasStoreClosureInActivePeriod: boolean;
 }) {
   const t = useTranslations("home");
   const tSub = useTranslations("subscription");
@@ -498,16 +609,20 @@ function HomeContent({
       {needsMoreDeliveryDates && (
         <Link href="/delivery" className="block">
           <Card className="border-red-300 bg-red-50 transition-colors hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:hover:bg-red-950/60">
-            <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-3">
+            <CardHeader className="flex flex-row items-center gap-3 space-y-0">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/15">
                 <CalendarCheck className="h-5 w-5 text-red-600 dark:text-red-400" />
               </div>
               <div className="min-w-0 flex-1">
                 <CardTitle className="text-base text-red-700 dark:text-red-300">
-                  배달 날짜를 선택해주세요
+                  {hasStoreClosureInActivePeriod
+                    ? "매장 휴무일로 날짜 변경이 필요해요."
+                    : "배달 날짜를 선택할 수 있어요."}
                 </CardTitle>
                 <p className="text-sm text-red-700/80 dark:text-red-300/80">
-                  결제가 완료되었어요. 아직 {remainingDeliverySlots}일의 배달 날짜를 더 선택해야 해요.
+                  {hasStoreClosureInActivePeriod
+                    ? `${remainingDeliverySlots}일을 다시 선택해주세요.`
+                    : `${remainingDeliverySlots}일을 선택해 주세요.`}
                 </p>
               </div>
             </CardHeader>
@@ -536,10 +651,23 @@ function HomeContent({
                       </p>
                     ) : nextDeliveryMenus.length > 0 ? (
                       <p>
-                        {nextDeliveryMenus
-                          .map((dm) => dm.menu?.title)
-                          .filter(Boolean)
-                          .join(", ")}
+                        {nextDeliveryMenuSelectionClosed
+                          ? nextDeliveryMenus
+                              .filter(
+                                (dm) =>
+                                  dm.slot_type === "main" &&
+                                  dm.menu?.category === "salad"
+                              )
+                              .slice(0, 2)
+                              .map((dm) => dm.menu?.title)
+                              .filter(Boolean)
+                              .join(", ") ||
+                            nextDeliveryMenus
+                              .map((dm) => dm.menu?.title)
+                              .filter(Boolean)
+                              .slice(0, 2)
+                              .join(", ")
+                          : "메뉴를 선택해 주세요."}
                       </p>
                     ) : (
                       <p>메뉴 미배정</p>
