@@ -133,6 +133,36 @@ function generateDatesFromPreset(
   return dates;
 }
 
+function dateOnly(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * Admin delivery picker: base window is the period's delivery_start–delivery_end,
+ * extended through the last day of the following calendar month so carryover /
+ * closure makeup days in the "next" month remain selectable. Any dates already
+ * on the subscription widen the range so they can be toggled off.
+ */
+function getAdminDeliveryPickerRange(
+  deliveryStart: string,
+  deliveryEnd: string,
+  existingSelected: Date[]
+): { start: Date; end: Date } {
+  const start = dateOnly(new Date(deliveryStart + "T00:00:00"));
+  const periodEnd = dateOnly(new Date(deliveryEnd + "T00:00:00"));
+  const extendedEnd = dateOnly(
+    new Date(periodEnd.getFullYear(), periodEnd.getMonth() + 2, 0)
+  );
+  let rangeStart = start;
+  let rangeEnd = extendedEnd;
+  for (const raw of existingSelected) {
+    const d = dateOnly(raw);
+    if (d < rangeStart) rangeStart = d;
+    if (d > rangeEnd) rangeEnd = d;
+  }
+  return { start: rangeStart, end: rangeEnd };
+}
+
 export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementProps) {
   type SubscriberRow = Subscription & {
     profiles: { nickname: string; email: string; real_name: string };
@@ -743,8 +773,11 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                       ) : (() => {
                                         if (!period.delivery_start || !period.delivery_end) return null;
                                         const holidaySet = new Set(holidays);
-                                        const start = new Date(period.delivery_start + "T00:00:00");
-                                        const end = new Date(period.delivery_end + "T00:00:00");
+                                        const { start, end } = getAdminDeliveryPickerRange(
+                                          period.delivery_start,
+                                          period.delivery_end,
+                                          editSubDates
+                                        );
 
                                         const isSameDay = (a: Date, b: Date) =>
                                           a.getFullYear() === b.getFullYear() &&
@@ -755,7 +788,8 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                           const ds = formatDateISO(date);
                                           const dow = date.getDay();
                                           if (dow === 0 || dow === 6 || holidaySet.has(ds)) return;
-                                          if (date < start || date > end) return;
+                                          const d0 = dateOnly(date);
+                                          if (d0 < start || d0 > end) return;
 
                                           setEditSubDates((prev) => {
                                             const exists = prev.some((d) => isSameDay(d, date));
@@ -766,6 +800,9 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
 
                                         return (
                                           <>
+                                            <p className="text-xs text-muted-foreground">
+                                              기본 배달 기간과 다음 달까지 선택할 수 있어요 (휴무 보정·캐리오버).
+                                            </p>
                                             <div className="overflow-hidden rounded-md border pb-2">
                                               <Calendar
                                                 defaultMonth={start}
@@ -1134,8 +1171,11 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
               const p = periods.find((pp) => pp.id === addSubDialog.periodId);
               if (!p?.delivery_start || !p?.delivery_end) return null;
               const holidaySet = new Set(holidays);
-              const start = new Date(p.delivery_start + "T00:00:00");
-              const end = new Date(p.delivery_end + "T00:00:00");
+              const { start, end } = getAdminDeliveryPickerRange(
+                p.delivery_start,
+                p.delivery_end,
+                addSubDates
+              );
 
               const isSameDay = (a: Date, b: Date) =>
                 a.getFullYear() === b.getFullYear() &&
@@ -1146,7 +1186,8 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                 const ds = formatDateISO(date);
                 const dow = date.getDay();
                 if (dow === 0 || dow === 6 || holidaySet.has(ds)) return;
-                if (date < start || date > end) return;
+                const d0 = dateOnly(date);
+                if (d0 < start || d0 > end) return;
 
                 setAddSubPreset(null);
                 setAddSubDates((prev) => {
@@ -1159,6 +1200,9 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
               return (
                 <div className="space-y-2">
                   <Label>배달 날짜 ({addSubDates.length}일 선택)</Label>
+                  <p className="text-xs text-muted-foreground">
+                    기본 배달 기간과 다음 달까지 선택할 수 있어요 (휴무 보정·캐리오버).
+                  </p>
                   <div className="overflow-hidden rounded-md border pb-2">
                     <Calendar
                       defaultMonth={start}
