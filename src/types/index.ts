@@ -11,6 +11,30 @@ export type PaymentMethod = "credit_card" | "gift_certificate" | "bank_transfer"
 
 export type PaymentStatus = "pending" | "completed" | "expired";
 
+/** Hold length option stored on subscription_holds.duration_kind */
+export type SubscriptionHoldDurationKind =
+  | "weeks_1"
+  | "weeks_2"
+  | "weeks_3"
+  | "months_1"
+  | "months_2"
+  | "months_3"
+  | "months_4"
+  | "months_5"
+  | "months_6"
+  | "months_7"
+  | "months_8"
+  | "months_9"
+  | "months_10"
+  | "months_11"
+  | "months_12";
+
+export type SubscriptionHoldStatus =
+  | "scheduled"
+  | "active"
+  | "cancelled"
+  | "completed";
+
 export type DietaryPreference =
   | "vegan"
   | "gluten_free"
@@ -41,10 +65,25 @@ export interface Subscription {
   total_delivery_days: number | null;
   carryover_delivery_days?: number;
   carryover_from_subscription_id?: string | null;
+  /** Cumulative days extended on this row for billing / effective deadline (hold). */
+  hold_billing_extension_days?: number;
   payment_method: PaymentMethod | null;
   payment_status: PaymentStatus;
   closure_reselection_required?: boolean;
   created_at: string;
+}
+
+export interface SubscriptionHold {
+  id: string;
+  subscription_id: string;
+  user_id: string;
+  status: SubscriptionHoldStatus;
+  start_date: string;
+  end_date: string;
+  duration_kind: SubscriptionHoldDurationKind;
+  created_at: string;
+  updated_at: string;
+  cancelled_at: string | null;
 }
 
 export interface SubscriptionPeriod {
