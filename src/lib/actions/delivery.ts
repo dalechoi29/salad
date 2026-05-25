@@ -148,13 +148,15 @@ export async function getMyDeliveryDays(
 }
 
 /**
- * Returns the weekdays (1=Mon … 5=Fri) the user most recently used in a
- * subscription period OTHER than `currentPeriodId`. Used to show ghost hints
- * on the calendar when subscribing to a new period for the first time.
+ * Returns the actual delivery date strings (YYYY-MM-DD) the user chose in
+ * their most recent subscription period OTHER than `currentPeriodId`.
+ * Used to show ghost dots on the calendar when subscribing to a new period
+ * for the first time — dots appear only on the exact dates they previously
+ * chose, not on every recurring weekday.
  */
-export async function getMyPreviousDeliveryWeekdays(
+export async function getMyPreviousDeliveryDates(
   currentPeriodId: string
-): Promise<number[]> {
+): Promise<string[]> {
   const supabase = await createClient();
   const user = await getAuthUser();
   if (!user) return [];
@@ -162,7 +164,7 @@ export async function getMyPreviousDeliveryWeekdays(
   // Find the most recent subscription that isn't for the current period.
   const { data: prevSubs } = await supabase
     .from("subscriptions")
-    .select("id, subscription_periods(created_at)")
+    .select("id")
     .eq("user_id", user.id)
     .neq("period_id", currentPeriodId)
     .order("created_at", { ascending: false })
@@ -173,19 +175,16 @@ export async function getMyPreviousDeliveryWeekdays(
 
   const { data: days } = await supabase
     .from("delivery_days")
-    .select("selected_days")
+    .select("week_start, selected_days")
     .eq("user_id", user.id)
-    .eq("subscription_id", prevSub.id);
+    .eq("subscription_id", prevSub.id)
+    .order("week_start");
 
   if (!days?.length) return [];
 
-  const weekdaySet = new Set<number>();
-  for (const row of days as { selected_days: number[] }[]) {
-    for (const d of row.selected_days ?? []) {
-      if (d >= 1 && d <= 5) weekdaySet.add(d);
-    }
-  }
-  return [...weekdaySet].sort((a, b) => a - b);
+  return expandDeliveryDaysToDateStrings(
+    days as { week_start: string; selected_days: number[] | null }[]
+  );
 }
 
 export async function getMyDeliveryDaysBySubscriptionIds(

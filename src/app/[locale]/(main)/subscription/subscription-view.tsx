@@ -131,8 +131,8 @@ interface SubscriptionViewProps {
     mayMutateHold: boolean;
     allowedDurationKinds: SubscriptionHoldDurationKind[];
   };
-  /** Weekdays (1=Mon…5=Fri) the user chose in their most recent previous subscription. */
-  previousDeliveryWeekdays?: number[];
+  /** Specific delivery dates (YYYY-MM-DD) the user chose in their most recent previous subscription. */
+  previousDeliveryDates?: string[];
 }
 
 const WEEKS_PER_MONTH = 4;
@@ -318,7 +318,7 @@ function DeliveryCalendar({
   calendarMonth,
   onToggleDate,
   disabled,
-  previousWeekdays = [],
+  previousDates = [],
 }: {
   selectedDates: Date[];
   holidayDates: Date[];
@@ -327,20 +327,21 @@ function DeliveryCalendar({
   calendarMonth: Date;
   onToggleDate: (date: Date) => void;
   disabled?: boolean;
-  /** Weekdays (1=Mon…5=Fri) the user chose last month — shown as ghost dots. */
-  previousWeekdays?: number[];
+  /** Specific delivery dates (YYYY-MM-DD) the user chose last time — shown as ghost dots. */
+  previousDates?: string[];
 }) {
   const startDate = deliveryStart
     ? new Date(deliveryStart + "T00:00:00")
     : null;
   const endDate = deliveryEnd ? new Date(deliveryEnd + "T00:00:00") : null;
-  const hasPreviousHints = previousWeekdays.length > 0;
+  const previousDateSet = useMemo(() => new Set(previousDates), [previousDates]);
+  const hasPreviousHints = previousDateSet.size > 0;
 
   return (
     <div className="space-y-4">
       {hasPreviousHints && (
         <p className="text-xs text-muted-foreground">
-          지난 달 선택하셨던 요일에 점(·)으로 표시했어요.
+          지난 구독에서 선택하셨던 날짜에 점(·)으로 표시했어요.
         </p>
       )}
       <Calendar
@@ -370,12 +371,13 @@ function DeliveryCalendar({
               startDate && endDate && d >= startDate && d <= endDate;
             const isClickable =
               !disabled && inRange && !isHoliday && !modifiers.outside;
+            const iso = formatDateISO(d);
             const isPreviousWeekday =
               hasPreviousHints &&
               !modifiers.outside &&
               inRange &&
               !isHoliday &&
-              previousWeekdays.includes(dow);
+              previousDateSet.has(iso);
 
             return (
               <td {...tdProps}>
@@ -505,7 +507,7 @@ export function SubscriptionView({
   carryoverReplacement,
   initialOpenHold = null,
   holdUiAccess,
-  previousDeliveryWeekdays = [],
+  previousDeliveryDates = [],
 }: SubscriptionViewProps) {
   const t = useTranslations("subscription");
   const tCommon = useTranslations("common");
@@ -536,7 +538,21 @@ export function SubscriptionView({
   }
 
   if (showSuccess) {
-    return <SuccessScreen period={period} onContinue={() => router.push("/")} />;
+    const now = new Date();
+    const isPaymentWindowOpen =
+      now >= new Date(period.pay_start) && now <= new Date(period.pay_end);
+
+    return (
+      <SuccessScreen
+        period={period}
+        isPaymentWindowOpen={isPaymentWindowOpen}
+        onContinue={() => router.push("/")}
+        onGoToPay={() => {
+          setShowSuccess(false);
+          router.refresh();
+        }}
+      />
+    );
   }
 
   if (existingSubscription && !cancelled) {
@@ -562,7 +578,7 @@ export function SubscriptionView({
       holidays={holidays}
       storeClosureDates={storeClosureDates}
       carryoverReplacement={carryoverReplacement}
-      previousDeliveryWeekdays={previousDeliveryWeekdays}
+      previousDeliveryDates={previousDeliveryDates}
       onSuccess={() => setShowSuccess(true)}
     />
   );
@@ -570,10 +586,14 @@ export function SubscriptionView({
 
 function SuccessScreen({
   period,
+  isPaymentWindowOpen,
   onContinue,
+  onGoToPay,
 }: {
   period: SubscriptionPeriod;
+  isPaymentWindowOpen: boolean;
   onContinue: () => void;
+  onGoToPay: () => void;
 }) {
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -593,12 +613,26 @@ function SuccessScreen({
               {period.target_month} 구독이 성공적으로 신청되었습니다.
             </p>
             <p className="text-sm text-muted-foreground">
-              결제 기간에 결제 방법을 선택하고 결제를 완료해주세요.
+              {isPaymentWindowOpen
+                ? "지금 바로 결제를 진행할 수 있어요."
+                : "결제 기간에 결제 방법을 선택하고 결제를 완료해주세요."}
             </p>
           </div>
-          <Button onClick={onContinue} className="mt-2">
-            홈으로 돌아가기
-          </Button>
+          <div className={cn("mt-2 flex gap-2", isPaymentWindowOpen ? "flex-col w-full" : "")}>
+            {isPaymentWindowOpen && (
+              <Button className="w-full" onClick={onGoToPay}>
+                <CreditCard className="mr-2 h-4 w-4" />
+                지금 결제하기
+              </Button>
+            )}
+            <Button
+              variant={isPaymentWindowOpen ? "outline" : "default"}
+              className={isPaymentWindowOpen ? "w-full" : ""}
+              onClick={onContinue}
+            >
+              홈으로 돌아가기
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -610,14 +644,14 @@ function SubscriptionForm({
   holidays,
   storeClosureDates = [],
   carryoverReplacement,
-  previousDeliveryWeekdays = [],
+  previousDeliveryDates = [],
   onSuccess,
 }: {
   period: SubscriptionPeriod;
   holidays: string[];
   storeClosureDates?: string[];
   carryoverReplacement?: CarryoverReplacement | null;
-  previousDeliveryWeekdays?: number[];
+  previousDeliveryDates?: string[];
   onSuccess: () => void;
 }) {
   const t = useTranslations("subscription");
@@ -901,7 +935,7 @@ function SubscriptionForm({
                 calendarMonth={calendarMonth}
                 onToggleDate={toggleDate}
                 disabled={!canEdit}
-                previousWeekdays={previousDeliveryWeekdays}
+                previousDates={previousDeliveryDates}
               />
             )}
           </div>

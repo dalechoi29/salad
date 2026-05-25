@@ -11,7 +11,7 @@ import type { CarryoverReplacement } from "@/lib/actions/subscription";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getStoreClosures } from "@/lib/actions/store-closure";
-import { getMyDeliveryDays, getMyPreviousDeliveryWeekdays } from "@/lib/actions/delivery";
+import { getMyDeliveryDays, getMyPreviousDeliveryDates } from "@/lib/actions/delivery";
 import { getOpenSubscriptionHold, getSubscriptionHoldUiAccess } from "@/lib/actions/subscription-hold";
 import { deliveryDaysToDateStrings, getKSTDate } from "@/lib/utils";
 import { SubscriptionView } from "./subscription-view";
@@ -42,7 +42,7 @@ export default async function SubscriptionPage({
   let lastPaymentMethod: string | null = null;
   let carryoverReplacement: CarryoverReplacement | null = null;
   let openHold = null;
-  let previousDeliveryWeekdays: number[] = [];
+  let previousDeliveryDates: string[] = [];
 
   if (period) {
     const deliveryYear = period.delivery_start
@@ -72,7 +72,7 @@ export default async function SubscriptionPage({
       savedDateStrings = deliveryDaysToDateStrings(deliveryDays);
       openHold = hold;
     } else {
-      previousDeliveryWeekdays = await getMyPreviousDeliveryWeekdays(period.id);
+      previousDeliveryDates = await getMyPreviousDeliveryDates(period.id);
     }
   }
 
@@ -89,7 +89,7 @@ export default async function SubscriptionPage({
       carryoverReplacement={carryoverReplacement}
       initialOpenHold={openHold}
       holdUiAccess={holdUiAccess}
-      previousDeliveryWeekdays={previousDeliveryWeekdays}
+      previousDeliveryDates={previousDeliveryDates}
     />
   );
 }
