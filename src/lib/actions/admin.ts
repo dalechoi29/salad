@@ -2,7 +2,11 @@
 
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { ActionResult, DailySaladStatus } from "@/types";
+import type {
+  ActionResult,
+  DailySaladStatus,
+  SubscriptionHoldDurationKind,
+} from "@/types";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
@@ -230,6 +234,66 @@ export async function updateAdminSetting(
   if (error) return { error: error.message };
 
   revalidatePath("/admin");
+  return { success: true };
+}
+
+export async function saveSubscriptionHoldAdminSettings(params: {
+  masterEnabled: boolean;
+  allowedDurationKinds: SubscriptionHoldDurationKind[];
+}): Promise<ActionResult> {
+  if (!(await hasPermission("settings"))) return { error: "권한이 없습니다" };
+
+  if (params.allowedDurationKinds.length === 0) {
+    return { error: "허용할 홀드 기간을 한 가지 이상 선택해 주세요" };
+  }
+
+  const supabase = await createClient();
+  const now = new Date().toISOString();
+  const rows = [
+    {
+      key: "subscription_hold_master_enabled",
+      value: params.masterEnabled ? "true" : "false",
+      updated_at: now,
+    },
+    {
+      key: "subscription_hold_allowed_duration_kinds",
+      value: JSON.stringify(params.allowedDurationKinds),
+      updated_at: now,
+    },
+  ];
+
+  for (const row of rows) {
+    const { error } = await supabase
+      .from("admin_settings")
+      .upsert(row, { onConflict: "key" });
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/admin/settings");
+  revalidatePath("/subscription");
+  return { success: true };
+}
+
+export async function setUserSubscriptionHoldEligible(
+  userId: string,
+  eligible: boolean
+): Promise<ActionResult> {
+  const canSettings = await hasPermission("settings");
+  const canSubStatus = await hasPermission("subscription_status");
+  if (!canSettings && !canSubStatus) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("profiles")
+    .update({ subscription_hold_eligible: eligible })
+    .eq("id", userId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin/users");
+  revalidatePath("/subscription");
   return { success: true };
 }
 

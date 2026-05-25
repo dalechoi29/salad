@@ -3,6 +3,7 @@
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Menu, DailyMenu, MenuSelection, MenuFavorite } from "@/types";
+import { userHasActiveHoldCoveringDeliveryDate } from "@/lib/subscription-hold-guard";
 
 const DEFAULT_SALAD_IMAGES = [
   "/images/default-salad-1.png",
@@ -368,6 +369,10 @@ export async function updateMenuQuantity(
   const user = await getAuthUser();
 
   if (!user) return { error: "AUTH_REQUIRED" };
+
+  if (await userHasActiveHoldCoveringDeliveryDate(supabase, user.id, deliveryDate)) {
+    return { error: "홀드 기간에는 메뉴를 변경할 수 없어요." };
+  }
 
   // A user picking / updating / clearing a menu for a date changes the
   // vendor report totals and the admin subscription-status drill-down for

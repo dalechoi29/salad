@@ -342,6 +342,7 @@ export function AdminSettingsView({
           </div>
         </CardContent>
       </Card>
+
     </div>
   );
 }

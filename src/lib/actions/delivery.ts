@@ -4,7 +4,9 @@ import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/ser
 import { revalidatePath } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isSelectionClosed } from "@/lib/utils";
+import { expandDeliveryDaysToDateStrings } from "@/lib/delivery-days";
+import { hasOpenSubscriptionHold } from "@/lib/subscription-hold-guard";
+import { formatDateISO, getKSTDate, isSelectionClosed } from "@/lib/utils";
 
 // Remove any user_menu_selections whose delivery_date is no longer in the user's
 // saved delivery_days for this subscription. Without this, if a user moves their
@@ -45,25 +47,6 @@ async function cleanupStaleSelectionsForSubscription(
   if (staleIds.length > 0) {
     await client.from("user_menu_selections").delete().in("id", staleIds);
   }
-}
-
-// Collapse DeliveryDay rows into ISO date strings (YYYY-MM-DD).
-function expandDeliveryDaysToDateStrings(
-  rows: { week_start: string; selected_days: number[] | null }[]
-): string[] {
-  const out: string[] = [];
-  for (const dd of rows) {
-    const ws = new Date(dd.week_start + "T00:00:00");
-    for (const dayOfWeek of dd.selected_days ?? []) {
-      const d = new Date(ws);
-      d.setDate(ws.getDate() + (dayOfWeek - 1));
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      out.push(`${y}-${m}-${day}`);
-    }
-  }
-  return out;
 }
 
 function expandWeekSelectionToDateStrings(
@@ -162,6 +145,47 @@ export async function getMyDeliveryDays(
     .order("week_start");
 
   return (data as DeliveryDay[]) ?? [];
+}
+
+/**
+ * Returns the weekdays (1=Mon … 5=Fri) the user most recently used in a
+ * subscription period OTHER than `currentPeriodId`. Used to show ghost hints
+ * on the calendar when subscribing to a new period for the first time.
+ */
+export async function getMyPreviousDeliveryWeekdays(
+  currentPeriodId: string
+): Promise<number[]> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return [];
+
+  // Find the most recent subscription that isn't for the current period.
+  const { data: prevSubs } = await supabase
+    .from("subscriptions")
+    .select("id, subscription_periods(created_at)")
+    .eq("user_id", user.id)
+    .neq("period_id", currentPeriodId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  const prevSub = prevSubs?.[0];
+  if (!prevSub) return [];
+
+  const { data: days } = await supabase
+    .from("delivery_days")
+    .select("selected_days")
+    .eq("user_id", user.id)
+    .eq("subscription_id", prevSub.id);
+
+  if (!days?.length) return [];
+
+  const weekdaySet = new Set<number>();
+  for (const row of days as { selected_days: number[] }[]) {
+    for (const d of row.selected_days ?? []) {
+      if (d >= 1 && d <= 5) weekdaySet.add(d);
+    }
+  }
+  return [...weekdaySet].sort((a, b) => a - b);
 }
 
 export async function getMyDeliveryDaysBySubscriptionIds(
@@ -340,6 +364,13 @@ export async function saveDeliveryDays(
 
   if (!subscription) return { error: "Subscription not found" };
 
+  if (await hasOpenSubscriptionHold(supabase, subscriptionId)) {
+    return {
+      error:
+        "배송·메뉴 홀드 중에는 여기서 배송일을 바꿀 수 없어요. 구독 화면에서 홀드를 취소한 뒤 수정해 주세요.",
+    };
+  }
+
   if (
     !subscription.total_delivery_days &&
     selectedDays.length > subscription.frequency_per_week
@@ -416,6 +447,35 @@ export async function saveDeliveryDays(
   return { success: true };
 }
 
+/** Same validation rules as bulkSaveDeliveryDays (past dates, holidays/closures, menu deadlines). */
+export async function validateDeliveryDateStringsForSubscription(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  dates: string[]
+): Promise<{ error?: string }> {
+  const todayStr = formatDateISO(getKSTDate());
+  const pastPick = dates.find((date) => date < todayStr);
+  if (pastPick) {
+    return { error: `${pastPick}은 지난 날짜라 선택할 수 없습니다` };
+  }
+  const blockedDateSet = await getBlockedDateSet(supabase, dates);
+  const blockedPick = dates.find((date) => blockedDateSet.has(date));
+  if (blockedPick) {
+    return {
+      error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다`,
+    };
+  }
+  const deadlineClosedPick = await getClosedByDeadlineDate(
+    supabase,
+    dates
+  );
+  if (deadlineClosedPick) {
+    return {
+      error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다`,
+    };
+  }
+  return {};
+}
+
 export async function bulkSaveDeliveryDays(
   subscriptionId: string,
   weeklySelections: { weekStart: string; selectedDays: number[] }[]
@@ -433,6 +493,13 @@ export async function bulkSaveDeliveryDays(
     .single();
 
   if (!subscription) return { error: "Subscription not found" };
+
+  if (await hasOpenSubscriptionHold(supabase, subscriptionId)) {
+    return {
+      error:
+        "배송·메뉴 홀드 중에는 여기서 배송일을 바꿀 수 없어요. 구독 화면에서 홀드를 취소한 뒤 수정해 주세요.",
+    };
+  }
 
   for (const { selectedDays } of weeklySelections) {
     if (selectedDays.some((d) => d < 1 || d > 5)) {
@@ -454,21 +521,11 @@ export async function bulkSaveDeliveryDays(
       selected_days: w.selectedDays,
     }))
   );
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  const pastPick = selectedDates.find((date) => date < todayStr);
-  if (pastPick) {
-    return { error: `${pastPick}은 지난 날짜라 선택할 수 없습니다` };
-  }
-  const blockedDateSet = await getBlockedDateSet(supabase, selectedDates);
-  const blockedPick = selectedDates.find((date) => blockedDateSet.has(date));
-  if (blockedPick) {
-    return { error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다` };
-  }
-  const deadlineClosedPick = await getClosedByDeadlineDate(supabase, selectedDates);
-  if (deadlineClosedPick) {
-    return { error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다` };
-  }
+  const validation = await validateDeliveryDateStringsForSubscription(
+    supabase,
+    selectedDates
+  );
+  if (validation.error) return { error: validation.error };
 
   const { error: deleteError } = await supabase
     .from("delivery_days")

@@ -11,7 +11,8 @@ import type { CarryoverReplacement } from "@/lib/actions/subscription";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getStoreClosures } from "@/lib/actions/store-closure";
-import { getMyDeliveryDays } from "@/lib/actions/delivery";
+import { getMyDeliveryDays, getMyPreviousDeliveryWeekdays } from "@/lib/actions/delivery";
+import { getOpenSubscriptionHold, getSubscriptionHoldUiAccess } from "@/lib/actions/subscription-hold";
 import { deliveryDaysToDateStrings, getKSTDate } from "@/lib/utils";
 import { SubscriptionView } from "./subscription-view";
 
@@ -36,9 +37,12 @@ export default async function SubscriptionPage({
   const now = getKSTDate();
   let existingSubscription = null;
   let holidays: string[] = [];
+  let storeClosureDates: string[] = [];
   let savedDateStrings: string[] = [];
   let lastPaymentMethod: string | null = null;
   let carryoverReplacement: CarryoverReplacement | null = null;
+  let openHold = null;
+  let previousDeliveryWeekdays: number[] = [];
 
   if (period) {
     const deliveryYear = period.delivery_start
@@ -52,27 +56,40 @@ export default async function SubscriptionPage({
       getMyCarryoverReplacement(period.id),
     ]);
     existingSubscription = sub;
+    storeClosureDates = storeClosures.map((c) => c.closure_date);
     holidays = [
       ...holidayData.map((h) => h.holiday_date),
-      ...storeClosures.map((closure) => closure.closure_date),
+      ...storeClosureDates,
     ];
     lastPaymentMethod = lastPm;
     carryoverReplacement = carryover;
 
     if (sub) {
-      const deliveryDays = await getMyDeliveryDays(sub.id);
+      const [deliveryDays, hold] = await Promise.all([
+        getMyDeliveryDays(sub.id),
+        getOpenSubscriptionHold(sub.id),
+      ]);
       savedDateStrings = deliveryDaysToDateStrings(deliveryDays);
+      openHold = hold;
+    } else {
+      previousDeliveryWeekdays = await getMyPreviousDeliveryWeekdays(period.id);
     }
   }
+
+  const holdUiAccess = await getSubscriptionHoldUiAccess();
 
   return (
     <SubscriptionView
       period={period}
       existingSubscription={existingSubscription}
       holidays={holidays}
+      storeClosureDates={storeClosureDates}
       savedDeliveryDates={savedDateStrings}
       lastPaymentMethod={lastPaymentMethod}
       carryoverReplacement={carryoverReplacement}
+      initialOpenHold={openHold}
+      holdUiAccess={holdUiAccess}
+      previousDeliveryWeekdays={previousDeliveryWeekdays}
     />
   );
 }

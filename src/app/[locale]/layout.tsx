@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { RouteProgress } from "@/components/layout/route-progress";
+import { DeploymentBanner } from "@/components/layout/deployment-banner";
 import { routing } from "@/i18n/routing";
 
 export const viewport: Viewport = {
@@ -51,6 +52,7 @@ export default async function LocaleLayout({
         >
           <NextIntlClientProvider messages={messages}>
             <TooltipProvider>
+              <DeploymentBanner />
               <RouteProgress />
               {children}
               <Toaster richColors position="top-center" />

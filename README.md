@@ -35,6 +35,8 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```
 
+Use a **dedicated Supabase project** for staging or local testing so you never hit production data. On non-production hosts, set `NEXT_PUBLIC_SITE_LABEL` (for example `Staging — test DB`) to show a persistent amber banner and the connected Supabase hostname.
+
 4. Run the development server:
 
 ```bash

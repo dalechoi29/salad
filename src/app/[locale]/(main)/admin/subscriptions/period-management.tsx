@@ -402,7 +402,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
       } else {
         setPeriods((prev) => [
           {
-            id: crypto.randomUUID(),
+            id: (result as { id?: string }).id ?? crypto.randomUUID(),
             ...payload,
             created_at: new Date().toISOString(),
           } as SubscriptionPeriod,

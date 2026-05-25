@@ -20,6 +20,7 @@ import {
   Leaf,
   CalendarCheck,
   Salad,
+  Pause,
 } from "lucide-react";
 
 interface AdminMenuItem {
@@ -116,6 +117,13 @@ const adminSections: AdminSection[] = [
         title: "마감일 관리",
         description: "메뉴 선택 마감일 설정",
         permission: "settings",
+      },
+      {
+        href: "/admin/subscription-holds",
+        icon: Pause,
+        title: "구독 홀드 관리",
+        description: "홀드 전역 설정, 허용 사용자 선택, 신청 내역 조회",
+        permission: "subscription_status",
       },
     ],
   },

@@ -64,18 +64,20 @@ export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
 
 export async function createSubscriptionPeriod(
   period: Omit<SubscriptionPeriod, "id" | "created_at" | "updated_at">
-): Promise<ActionResult> {
+): Promise<ActionResult & { id?: string }> {
   const supabase = await createClient();
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("subscription_periods")
-    .insert(period);
+    .insert(period)
+    .select("id")
+    .single();
 
   if (error) return { error: error.message };
 
   revalidatePath("/admin/subscriptions");
   revalidatePath("/admin/subscription-status");
-  return { success: true };
+  return { success: true, id: data.id as string };
 }
 
 export async function updateSubscriptionPeriod(

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Calendar } from "@/components/ui/calendar";
-import { cn } from "@/lib/utils";
+import { cn, formatDateISO } from "@/lib/utils";
 import {
   createOrUpdateSubscription,
   resolveCarryoverReplacement,
@@ -25,6 +25,11 @@ import {
   cancelSubscription,
   getSoloDeliveryDates,
 } from "@/lib/actions/subscription";
+import {
+  cancelSubscriptionHold,
+  requestSubscriptionHold,
+  updateSubscriptionHoldDuration,
+} from "@/lib/actions/subscription-hold";
 import { bulkSaveDeliveryDays } from "@/lib/actions/delivery";
 import { handleActionError } from "@/lib/handle-action-error";
 import { toast } from "sonner";
@@ -51,6 +56,12 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -67,16 +78,61 @@ import type {
   SubscriptionPeriod,
   Subscription,
   PaymentMethod,
+  SubscriptionHold,
+  SubscriptionHoldDurationKind,
 } from "@/types";
 import type { CarryoverReplacement } from "@/lib/actions/subscription";
+import {
+  HOLD_DURATION_OPTIONS,
+  applyHoldShiftToSortedDates,
+  computeHoldExclusiveEnd,
+  computeHoldShiftDays,
+  effectivePayDeadlineKstDate,
+  findHoldAnchorDate,
+  todayKstIso,
+} from "@/lib/subscription-hold";
+
+/** UI-only: omit store-closure striping on May weekdays in subscription calendars. Logic still uses full `holidays`. */
+function subscriptionCalendarDisplayHolidayStrings(
+  mergedHolidayIsoStrings: string[],
+  storeClosureIsoStrings: string[] | undefined,
+  enabled: boolean
+): string[] {
+  if (!enabled || !storeClosureIsoStrings?.length) return mergedHolidayIsoStrings;
+  const closureSet = new Set(storeClosureIsoStrings);
+  return mergedHolidayIsoStrings.filter((iso) => {
+    if (!closureSet.has(iso)) return true;
+    const d = new Date(iso + "T00:00:00");
+    return d.getMonth() !== 4;
+  });
+}
+
+/**
+ * When true, May store-closure days are not shown as red on subscription DeliveryCalendars only.
+ * Disabled in production so 운영 behaves normally; enable in dev/preview for testing.
+ */
+const DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR =
+  process.env.NODE_ENV !== "production";
+
+type HoldRequestDurationChoice = "off" | SubscriptionHoldDurationKind;
 
 interface SubscriptionViewProps {
   period: SubscriptionPeriod | null;
   existingSubscription: Subscription | null;
   holidays: string[];
+  /** Closure dates only (subset of `holidays`); used for optional calendar UI filtering. */
+  storeClosureDates?: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
   carryoverReplacement?: CarryoverReplacement | null;
+  initialOpenHold?: SubscriptionHold | null;
+  /** Admin-controlled: who may request/change hold; which duration kinds are allowed. */
+  holdUiAccess: {
+    mayMutateHold: boolean;
+    allowedDurationKinds: SubscriptionHoldDurationKind[];
+  };
+  /** Weekdays (1=Mon…5=Fri) the user chose in their most recent previous subscription. */
+  previousDeliveryWeekdays?: number[];
 }
 
 const WEEKS_PER_MONTH = 4;
@@ -262,6 +318,7 @@ function DeliveryCalendar({
   calendarMonth,
   onToggleDate,
   disabled,
+  previousWeekdays = [],
 }: {
   selectedDates: Date[];
   holidayDates: Date[];
@@ -270,14 +327,22 @@ function DeliveryCalendar({
   calendarMonth: Date;
   onToggleDate: (date: Date) => void;
   disabled?: boolean;
+  /** Weekdays (1=Mon…5=Fri) the user chose last month — shown as ghost dots. */
+  previousWeekdays?: number[];
 }) {
   const startDate = deliveryStart
     ? new Date(deliveryStart + "T00:00:00")
     : null;
   const endDate = deliveryEnd ? new Date(deliveryEnd + "T00:00:00") : null;
+  const hasPreviousHints = previousWeekdays.length > 0;
 
   return (
     <div className="space-y-4">
+      {hasPreviousHints && (
+        <p className="text-xs text-muted-foreground">
+          지난 달 선택하셨던 요일에 점(·)으로 표시했어요.
+        </p>
+      )}
       <Calendar
         defaultMonth={calendarMonth}
         hideNavigation
@@ -305,10 +370,16 @@ function DeliveryCalendar({
               startDate && endDate && d >= startDate && d <= endDate;
             const isClickable =
               !disabled && inRange && !isHoliday && !modifiers.outside;
+            const isPreviousWeekday =
+              hasPreviousHints &&
+              !modifiers.outside &&
+              inRange &&
+              !isHoliday &&
+              previousWeekdays.includes(dow);
 
             return (
               <td {...tdProps}>
-                <div className="flex items-center justify-center py-0.5">
+                <div className="flex flex-col items-center justify-center py-0.5">
                   <button
                     type="button"
                     onClick={() => isClickable && onToggleDate(d)}
@@ -335,6 +406,16 @@ function DeliveryCalendar({
                   >
                     {!modifiers.hidden && d.getDate()}
                   </button>
+                  {isPreviousWeekday && !modifiers.hidden && (
+                    <span
+                      className={cn(
+                        "mt-0.5 h-1 w-1 rounded-full",
+                        isSelected
+                          ? "bg-blue-400 dark:bg-blue-500"
+                          : "bg-muted-foreground/40"
+                      )}
+                    />
+                  )}
                 </div>
               </td>
             );
@@ -350,6 +431,12 @@ function DeliveryCalendar({
           <span className="inline-block size-3 rounded-full bg-red-100 dark:bg-red-900/30" />
           공휴일
         </span>
+        {hasPreviousHints && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40" />
+            지난 달 선택
+          </span>
+        )}
       </div>
     </div>
   );
@@ -412,9 +499,13 @@ export function SubscriptionView({
   period,
   existingSubscription,
   holidays,
+  storeClosureDates = [],
   savedDeliveryDates = [],
   lastPaymentMethod,
   carryoverReplacement,
+  initialOpenHold = null,
+  holdUiAccess,
+  previousDeliveryWeekdays = [],
 }: SubscriptionViewProps) {
   const t = useTranslations("subscription");
   const tCommon = useTranslations("common");
@@ -454,9 +545,12 @@ export function SubscriptionView({
         period={period}
         subscription={existingSubscription}
         holidays={holidays}
+        storeClosureDates={storeClosureDates}
         savedDeliveryDates={savedDeliveryDates}
         lastPaymentMethod={lastPaymentMethod}
         carryoverReplacement={carryoverReplacement}
+        initialOpenHold={initialOpenHold}
+        holdUiAccess={holdUiAccess}
         onCancelled={() => setCancelled(true)}
       />
     );
@@ -466,7 +560,9 @@ export function SubscriptionView({
     <SubscriptionForm
       period={period}
       holidays={holidays}
+      storeClosureDates={storeClosureDates}
       carryoverReplacement={carryoverReplacement}
+      previousDeliveryWeekdays={previousDeliveryWeekdays}
       onSuccess={() => setShowSuccess(true)}
     />
   );
@@ -512,12 +608,16 @@ function SuccessScreen({
 function SubscriptionForm({
   period,
   holidays,
+  storeClosureDates = [],
   carryoverReplacement,
+  previousDeliveryWeekdays = [],
   onSuccess,
 }: {
   period: SubscriptionPeriod;
   holidays: string[];
+  storeClosureDates?: string[];
   carryoverReplacement?: CarryoverReplacement | null;
+  previousDeliveryWeekdays?: number[];
   onSuccess: () => void;
 }) {
   const t = useTranslations("subscription");
@@ -536,7 +636,15 @@ function SubscriptionForm({
   const carryoverDaysAvailable = carryoverReplacement?.availableDays ?? 0;
   const carryoverUsedDates = carryoverReplacement?.usedDates ?? [];
   const carryoverDaysAlreadySelected = carryoverUsedDates.length;
-  const holidayDates = holidays.map((d) => new Date(d + "T00:00:00"));
+  const holidayDatesForCalendar = useMemo(
+    () =>
+      subscriptionCalendarDisplayHolidayStrings(
+        holidays,
+        storeClosureDates,
+        DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR
+      ).map((d) => new Date(d + "T00:00:00")),
+    [holidays, storeClosureDates]
+  );
   const calendarMonth = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
     : new Date();
@@ -787,12 +895,13 @@ function SubscriptionForm({
               <DeliveryCalendar
                 key={selectedPreset ?? "manual"}
                 selectedDates={selectedDates}
-                holidayDates={holidayDates}
+                holidayDates={holidayDatesForCalendar}
                 deliveryStart={period.delivery_start}
                 deliveryEnd={period.delivery_end}
                 calendarMonth={calendarMonth}
                 onToggleDate={toggleDate}
                 disabled={!canEdit}
+                previousWeekdays={previousDeliveryWeekdays}
               />
             )}
           </div>
@@ -877,17 +986,26 @@ function SubscriptionStatus({
   period,
   subscription,
   holidays,
+  storeClosureDates = [],
   savedDeliveryDates: initialSavedDates = [],
   lastPaymentMethod,
   carryoverReplacement,
+  initialOpenHold = null,
+  holdUiAccess,
   onCancelled,
 }: {
   period: SubscriptionPeriod;
   subscription: Subscription;
   holidays: string[];
+  storeClosureDates?: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
   carryoverReplacement?: CarryoverReplacement | null;
+  initialOpenHold?: SubscriptionHold | null;
+  holdUiAccess: {
+    mayMutateHold: boolean;
+    allowedDurationKinds: SubscriptionHoldDurationKind[];
+  };
   onCancelled?: () => void;
 }) {
   const t = useTranslations("subscription");
@@ -917,6 +1035,22 @@ function SubscriptionStatus({
   const [paymentStatus, setPaymentStatus] = useState(
     subscription.payment_status
   );
+  const [openHold, setOpenHold] = useState<SubscriptionHold | null>(
+    () => initialOpenHold ?? null
+  );
+  const [holdRequestKind, setHoldRequestKind] =
+    useState<HoldRequestDurationChoice>("off");
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdConfirmOpen, setHoldConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    setOpenHold(initialOpenHold ?? null);
+  }, [initialOpenHold]);
+
+  useEffect(() => {
+    setPaymentStatus(subscription.payment_status);
+  }, [subscription.id, subscription.payment_status]);
+
   const [currentFrequency, setCurrentFrequency] = useState(
     subscription.frequency_per_week
   );
@@ -929,6 +1063,13 @@ function SubscriptionStatus({
   );
 
   const phase = getPeriodPhase(period);
+  const [soloDates, setSoloDates] = useState<{ date: string; weekday: string }[]>([]);
+  useEffect(() => {
+    if (phase === "paying" || isInPaymentWindow) {
+      getSoloDeliveryDates(period.id).then(setSoloDates);
+    }
+  }, [period.id, phase, isInPaymentWindow]);
+
   const holidaySet = useMemo(() => new Set(holidays), [holidays]);
   const carryoverDaysAvailable =
     subscription.carryover_delivery_days && subscription.carryover_delivery_days > 0
@@ -997,7 +1138,15 @@ function SubscriptionStatus({
   const [editSelectedDates, setEditSelectedDates] = useState<Date[]>([]);
   const [editShowCalendar, setEditShowCalendar] = useState(false);
 
-  const holidayDates = holidays.map((d) => new Date(d + "T00:00:00"));
+  const holidayDatesForCalendar = useMemo(
+    () =>
+      subscriptionCalendarDisplayHolidayStrings(
+        holidays,
+        storeClosureDates,
+        DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR
+      ).map((d) => new Date(d + "T00:00:00")),
+    [holidays, storeClosureDates]
+  );
   const calendarMonth = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
     : new Date();
@@ -1018,6 +1167,10 @@ function SubscriptionStatus({
   }, [holidaySet, selectedPreset, period.delivery_start, period.delivery_end]);
 
   function handleStartEditing() {
+    if (openHold) {
+      toast.error("배송·메뉴 홀드 중에는 배송일을 수정할 수 없어요");
+      return;
+    }
     setFrequency(isCustomDates ? 0 : currentFrequency);
     setSalads(currentSalads);
     setSelectedPreset(matchedPresetLabel);
@@ -1092,12 +1245,150 @@ function SubscriptionStatus({
   const isPaid = paymentStatus === "completed";
   const canEdit = phase === "applying" || phase === "paying";
 
-  const [soloDates, setSoloDates] = useState<{ date: string; weekday: string }[]>([]);
+  const holdKindSelectOptions = useMemo(
+    () =>
+      HOLD_DURATION_OPTIONS.filter((o) =>
+        holdUiAccess.allowedDurationKinds.includes(o.kind)
+      ),
+    [holdUiAccess.allowedDurationKinds]
+  );
+
+  const showHoldCard =
+    holdUiAccess.mayMutateHold || openHold != null;
+
   useEffect(() => {
-    if (phase === "paying" || isInPaymentWindow) {
-      getSoloDeliveryDates(period.id).then(setSoloDates);
+    if (
+      holdRequestKind !== "off" &&
+      !holdUiAccess.allowedDurationKinds.includes(holdRequestKind)
+    ) {
+      setHoldRequestKind("off");
     }
-  }, [period.id, phase, isInPaymentWindow]);
+  }, [holdRequestKind, holdUiAccess.allowedDurationKinds]);
+
+  const holdApplyPreview = useMemo(() => {
+    if (holdRequestKind === "off") return null;
+    if (!holdUiAccess.allowedDurationKinds.includes(holdRequestKind)) {
+      return null;
+    }
+    const datesSource = isEditing ? editSelectedDates : savedDates;
+    const sorted = [...datesSource].map((d) => formatDateISO(d)).sort();
+    const ds = period.delivery_start?.slice(0, 10) ?? null;
+    const de = period.delivery_end?.slice(0, 10) ?? null;
+    const anchor = findHoldAnchorDate({
+      todayKstIso: todayKstIso(),
+      deliveryIsoDatesSorted: sorted,
+      deliveryStart: ds,
+      deliveryEnd: de,
+    });
+    if (!anchor) return null;
+    const endExclusive = computeHoldExclusiveEnd(anchor, holdRequestKind);
+    const label =
+      HOLD_DURATION_OPTIONS.find((o) => o.kind === holdRequestKind)?.label ??
+      holdRequestKind;
+    return { anchor, endExclusive, label };
+  }, [
+    isEditing,
+    editSelectedDates,
+    savedDates,
+    period.delivery_start,
+    period.delivery_end,
+    holdRequestKind,
+    holdUiAccess.allowedDurationKinds,
+  ]);
+
+  const holdCalendarDisplayDates = useMemo(() => {
+    const datesSource = isEditing ? editSelectedDates : savedDates;
+    if (openHold) {
+      return [...datesSource].map((d) => new Date(d));
+    }
+    const sorted = [...datesSource].map((d) => formatDateISO(d)).sort();
+    if (!holdApplyPreview) {
+      return [...datesSource].map((d) => new Date(d));
+    }
+    const L = computeHoldShiftDays(
+      holdApplyPreview.anchor,
+      holdApplyPreview.endExclusive
+    );
+    const shifted = applyHoldShiftToSortedDates(
+      sorted,
+      holdApplyPreview.anchor,
+      L
+    );
+    return shifted.map((iso) => new Date(iso + "T00:00:00"));
+  }, [
+    isEditing,
+    editSelectedDates,
+    savedDates,
+    openHold,
+    holdApplyPreview,
+  ]);
+
+  async function handleRequestHold() {
+    if (!canEdit) return;
+    if (!isPaid) {
+      toast.error("결제 완료 후 홀드를 신청할 수 있어요");
+      return;
+    }
+    if (holdRequestKind === "off") {
+      toast.error("홀드 길이를 선택해 주세요");
+      return;
+    }
+    setHoldBusy(true);
+    try {
+      const result = await requestSubscriptionHold(
+        subscription.id,
+        holdRequestKind
+      );
+      if (result.error) {
+        if (handleActionError(result.error, router)) return;
+        toast.error(result.error);
+        return;
+      }
+      toast.success("배송·메뉴 홀드가 신청되었습니다");
+      router.refresh();
+    } finally {
+      setHoldBusy(false);
+      setHoldConfirmOpen(false);
+    }
+  }
+
+  async function handleUpdateHoldDuration(kind: SubscriptionHoldDurationKind) {
+    if (!canEdit || !openHold) return;
+    setHoldBusy(true);
+    try {
+      const result = await updateSubscriptionHoldDuration(
+        subscription.id,
+        kind
+      );
+      if (result.error) {
+        if (handleActionError(result.error, router)) return;
+        toast.error(result.error);
+        return;
+      }
+      toast.success("홀드 기간이 변경되었습니다");
+      router.refresh();
+    } finally {
+      setHoldBusy(false);
+    }
+  }
+
+  async function handleCancelHold() {
+    if (!openHold) return;
+    if (holdUiAccess.mayMutateHold && !canEdit) return;
+    setHoldBusy(true);
+    try {
+      const result = await cancelSubscriptionHold(subscription.id);
+      if (result.error) {
+        if (handleActionError(result.error, router)) return;
+        toast.error(result.error);
+        return;
+      }
+      toast.success("홀드가 취소되었습니다");
+      router.refresh();
+    } finally {
+      setHoldBusy(false);
+    }
+  }
 
   async function handleSavePlan() {
     if (frequency === 0 && editSelectedDates.length === 0) {
@@ -1255,7 +1546,213 @@ function SubscriptionStatus({
         )}
       </div>
 
-      <PeriodInfoCard period={period} phase={phase} hideApplicationPeriod />
+      <PeriodInfoCard
+        period={period}
+        phase={phase}
+        hideApplicationPeriod
+        holdBillingExtensionDays={subscription.hold_billing_extension_days}
+      />
+
+      {showHoldCard && (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">배송·메뉴 홀드</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            {holdUiAccess.mayMutateHold
+              ? "길이를 고르면 아래 달력에 예상 배송일이 바로 반영됩니다."
+              : "진행 중인 홀드만 확인·취소할 수 있어요."}
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {openHold && !holdUiAccess.mayMutateHold ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+              관리자 설정으로 홀드 신청·기간 변경은 일시적으로 닫혀 있어요. 필요하면
+              취소만 할 수 있습니다.
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            홀드 중에는 배송·메뉴 선택이 멈추고, 결제 마감은 홀드 기간만큼 연장됩니다.
+            {subscription.hold_billing_extension_days != null &&
+            subscription.hold_billing_extension_days > 0
+              ? ` (누적 +${subscription.hold_billing_extension_days}일)`
+              : ""}
+          </p>
+          {!openHold ? (
+            holdUiAccess.mayMutateHold ? (
+            <div className="space-y-2">
+              <Label className="text-xs">홀드 길이</Label>
+              <Select
+                value={holdRequestKind}
+                onValueChange={(v) =>
+                  setHoldRequestKind((v ?? "off") as HoldRequestDurationChoice)
+                }
+                disabled={holdBusy}
+              >
+                <SelectTrigger className="h-9 w-full max-w-xs">
+                  <span className="flex flex-1 text-left">
+                    {holdRequestKind === "off"
+                      ? "안 함"
+                      : (HOLD_DURATION_OPTIONS.find((o) => o.kind === holdRequestKind)
+                          ?.label ?? holdRequestKind)}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off" label="안 함">
+                    안 함
+                  </SelectItem>
+                  {holdKindSelectOptions.map((o) => (
+                    <SelectItem key={o.kind} value={o.kind} label={o.label}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                disabled={
+                  !canEdit || holdBusy || !isPaid || holdRequestKind === "off"
+                }
+                title={
+                  holdRequestKind === "off"
+                    ? "홀드 길이를 선택해 주세요"
+                    : !isPaid
+                      ? "결제 완료 후 홀드를 신청할 수 있어요"
+                      : !canEdit
+                        ? "신청·결제 기간에만 신청할 수 있어요"
+                        : undefined
+                }
+                onClick={() => {
+                  if (!holdApplyPreview) {
+                    toast.error(
+                      "홀드 시작일을 계산할 수 없어요. 배송일을 확인해 주세요."
+                    );
+                    return;
+                  }
+                  setHoldConfirmOpen(true);
+                }}
+              >
+                {holdBusy && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+                홀드 신청
+              </Button>
+              {(!canEdit || !isPaid || holdRequestKind === "off" || holdBusy) && (
+                  <p className="text-xs text-muted-foreground">
+                    {holdRequestKind === "off"
+                      ? "홀드 길이에서 「안 함」 말고 기간을 고르면 버튼이 활성화돼요."
+                      : holdBusy
+                        ? "처리 중이에요."
+                        : !isPaid
+                          ? "결제 완료 후에 홀드를 신청할 수 있어요."
+                          : !canEdit
+                            ? "신청·결제 기간에만 홀드를 신청할 수 있어요."
+                            : null}
+                  </p>
+                )}
+            </div>
+            ) : null
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                {HOLD_DURATION_OPTIONS.find((o) => o.kind === openHold.duration_kind)
+                  ?.label ?? openHold.duration_kind}{" "}
+                · 시작일 {openHold.start_date} (KST 기준 첫 배송일) · 종료{" "}
+                <span className="font-medium text-foreground">
+                  {openHold.end_date}
+                </span>{" "}
+                전까지(종료일 미포함)
+              </p>
+              {canEdit ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  {holdUiAccess.mayMutateHold &&
+                  holdUiAccess.allowedDurationKinds.includes(
+                    openHold.duration_kind
+                  ) ? (
+                    <Select
+                      value={openHold.duration_kind}
+                      onValueChange={(v) => {
+                        if (!v || v === openHold.duration_kind) return;
+                        void handleUpdateHoldDuration(
+                          v as SubscriptionHoldDurationKind
+                        );
+                      }}
+                      disabled={holdBusy}
+                    >
+                      <SelectTrigger className="h-9 w-full max-w-xs">
+                        <span className="flex flex-1 text-left">
+                          {HOLD_DURATION_OPTIONS.find(
+                            (o) => o.kind === openHold.duration_kind
+                          )?.label ?? openHold.duration_kind}
+                        </span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {holdKindSelectOptions.map((o) => (
+                          <SelectItem key={o.kind} value={o.kind} label={o.label}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : holdUiAccess.mayMutateHold ? (
+                    <p className="text-xs text-muted-foreground">
+                      현재 적용:{" "}
+                      <span className="font-medium text-foreground">
+                        {HOLD_DURATION_OPTIONS.find(
+                          (o) => o.kind === openHold.duration_kind
+                        )?.label ?? openHold.duration_kind}
+                      </span>{" "}
+                      (관리자가 허용한 옵션에 포함되지 않아 기간 변경은 할 수 없어요)
+                    </p>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={holdBusy}
+                    onClick={() => void handleCancelHold()}
+                  >
+                    홀드 취소
+                  </Button>
+                </div>
+              ) : !holdUiAccess.mayMutateHold ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={holdBusy}
+                  onClick={() => void handleCancelHold()}
+                >
+                  홀드 취소
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  신청·결제 기간이 끝난 뒤에는 홀드를 바꿀 수 없어요. 필요하면
+                  고객센터로 문의해 주세요.
+                </p>
+              )}
+            </div>
+          )}
+
+          {period.delivery_start && (
+            <div className="space-y-2 border-t border-border pt-3">
+              <p className="text-xs text-muted-foreground">
+                {openHold
+                  ? "현재 적용된 배송일"
+                  : holdApplyPreview
+                    ? "선택 길이 기준 예상 배송일"
+                    : "현재 저장된 배송일"}
+              </p>
+              <DeliveryCalendar
+                key={`hold-cal-${openHold?.id ?? "new"}-${holdRequestKind}-${openHold?.duration_kind ?? ""}`}
+                selectedDates={holdCalendarDisplayDates}
+                holidayDates={holidayDatesForCalendar}
+                deliveryStart={period.delivery_start}
+                deliveryEnd={period.delivery_end}
+                calendarMonth={calendarMonth}
+                onToggleDate={() => {}}
+                disabled
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      )}
 
       {/* Subscription Summary / Edit */}
       <Card>
@@ -1278,6 +1775,12 @@ function SubscriptionStatus({
                   size="sm"
                   className="h-7 text-sm"
                   onClick={handleStartEditing}
+                  disabled={!!openHold}
+                  title={
+                    openHold
+                      ? "배송·메뉴 홀드 중에는 배송일을 수정할 수 없어요"
+                      : undefined
+                  }
                 >
                   <Pencil className="mr-1 h-3 w-3" />
                   수정
@@ -1372,7 +1875,7 @@ function SubscriptionStatus({
                   <DeliveryCalendar
                     key={selectedPreset ?? "manual"}
                     selectedDates={editSelectedDates}
-                    holidayDates={holidayDates}
+                    holidayDates={holidayDatesForCalendar}
                     deliveryStart={period.delivery_start}
                     deliveryEnd={period.delivery_end}
                     calendarMonth={calendarMonth}
@@ -1509,20 +2012,6 @@ function SubscriptionStatus({
                   {(totalSalads * period.price_per_salad).toLocaleString()}원
                 </span>
               </div>
-
-              {!canEdit && savedDates.length > 0 && period.delivery_start && (
-                <div className="pt-2">
-                  <DeliveryCalendar
-                    selectedDates={savedDates}
-                    holidayDates={holidayDates}
-                    deliveryStart={period.delivery_start}
-                    deliveryEnd={period.delivery_end}
-                    calendarMonth={calendarMonth}
-                    onToggleDate={() => {}}
-                    disabled
-                  />
-                </div>
-              )}
             </div>
           )}
         </CardContent>
@@ -1714,6 +2203,58 @@ function SubscriptionStatus({
         </Link>
       )}
 
+      <Dialog open={holdConfirmOpen} onOpenChange={setHoldConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>배송·메뉴 홀드 신청</DialogTitle>
+          </DialogHeader>
+          {holdApplyPreview ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">
+                아래 구간 동안 배송·메뉴 선택이 멈추고, 배송일은 그만큼 뒤로 밀립니다.
+                결제 마감은 누적 홀드 연장일만큼 연장돼요.
+              </p>
+              <div className="rounded-md border bg-muted/40 p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  적용 구간 [시작, 종료) · 반개구간
+                </p>
+                <p className="mt-1 font-mono text-base font-semibold">
+                  {holdApplyPreview.anchor} ~ {holdApplyPreview.endExclusive}
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  종료일({holdApplyPreview.endExclusive}) 당일은 홀드에 포함되지 않으며,
+                  그날부터 배송·메뉴가 이어집니다.
+                </p>
+                <p className="mt-2 text-xs">
+                  선택 길이:{" "}
+                  <span className="font-medium">{holdApplyPreview.label}</span>
+                </p>
+              </div>
+            </div>
+          ) : null}
+          <div className="flex gap-2 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              type="button"
+              onClick={() => setHoldConfirmOpen(false)}
+              disabled={holdBusy}
+            >
+              취소
+            </Button>
+            <Button
+              className="flex-1"
+              type="button"
+              disabled={holdBusy || !holdApplyPreview}
+              onClick={() => void handleRequestHold()}
+            >
+              {holdBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              신청하기
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -1751,10 +2292,13 @@ function PeriodInfoCard({
   period,
   phase,
   hideApplicationPeriod,
+  holdBillingExtensionDays,
 }: {
   period: SubscriptionPeriod;
   phase: string;
   hideApplicationPeriod?: boolean;
+  /** Cumulative hold extension days on subscription row; shows effective pay deadline (KST). */
+  holdBillingExtensionDays?: number | null;
 }) {
   const t = useTranslations("subscription");
 
@@ -1795,6 +2339,21 @@ function PeriodInfoCard({
             {formatDate(period.pay_start)} ~ {formatDate(period.pay_end)}
           </span>
         </div>
+        {holdBillingExtensionDays != null && holdBillingExtensionDays > 0 ? (
+          <div className="flex justify-between border-t border-border pt-2 text-xs">
+            <span className="text-muted-foreground">
+              홀드 반영 결제 마감일 (KST)
+            </span>
+            <span className="font-medium">
+              {formatDate(
+                effectivePayDeadlineKstDate(
+                  period.pay_end,
+                  holdBillingExtensionDays
+                ) + "T12:00:00"
+              )}
+            </span>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

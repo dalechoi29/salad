@@ -54,6 +54,8 @@ export interface Profile {
   status: UserStatus;
   pickup_streak: number;
   created_at: string;
+  /** Admin opt-in; combined with admin_settings.subscription_hold_master_enabled for hold UI/API. */
+  subscription_hold_eligible?: boolean;
 }
 
 export interface Subscription {
