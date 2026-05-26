@@ -339,12 +339,19 @@ function DeliveryCalendar({
     () => new Set(selectedDates.map((d) => formatDateISO(d))),
     [selectedDates]
   );
-  // Only show hints when there are previous dates that are NOT already selected
-  // (i.e., visible as gray dots). If all previous dates are covered by the
-  // current selection, the dots are invisible so the legend/description adds no value.
-  const hasPreviousHints =
-    previousDates.length > 0 &&
-    previousDates.some((d) => !selectedDateStrings.has(d));
+  // Show hints only when there are previous dates that (a) fall inside the
+  // current delivery range — so out-of-range May dates don't trigger the legend
+  // on a June calendar — and (b) are not already selected (visible as gray dots).
+  const hasPreviousHints = useMemo(() => {
+    if (previousDates.length === 0) return false;
+    return previousDates
+      .filter(
+        (d) =>
+          (!deliveryStart || d >= deliveryStart) &&
+          (!deliveryEnd || d <= deliveryEnd)
+      )
+      .some((d) => !selectedDateStrings.has(d));
+  }, [previousDates, deliveryStart, deliveryEnd, selectedDateStrings]);
 
   return (
     <div className="space-y-4">
@@ -775,16 +782,13 @@ function SubscriptionForm({
   const totalSalads = deliveryDayCount * salads;
   const totalPrice =
     period.price_per_salad > 0 ? paidTotalSalads * period.price_per_salad : null;
-  // Price the user would pay with no compensation applied — used for strikethrough
-  const originalPaidDeliveryDays =
-    carryoverDaysAvailable > 0
-      ? getPlannedPaidDeliveryDays(frequency, selectedDates.length, period, holidaySetForCount, 0)
-      : paidDeliveryDayCount;
+  // Full cost of all selected deliveries at the regular rate — shown as
+  // strikethrough when compensation reduces what the user actually pays.
   const originalTotalPrice =
     period.price_per_salad > 0 &&
-    carryoverDaysAvailable > 0 &&
-    originalPaidDeliveryDays !== paidDeliveryDayCount
-      ? originalPaidDeliveryDays * salads * period.price_per_salad
+    totalCarryoverDays > 0 &&
+    totalSalads * period.price_per_salad !== totalPrice
+      ? totalSalads * period.price_per_salad
       : null;
 
   async function handleSubmit() {
@@ -1003,6 +1007,10 @@ function SubscriptionForm({
               <span className="text-muted-foreground">배달 횟수</span>
               <span className="font-medium">{deliveryDayCount}회</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">월 총 샐러드</span>
+              <span className="font-medium">{totalSalads}개</span>
+            </div>
             {totalCarryoverDays > 0 && (
               <div className="flex justify-between text-amber-700 dark:text-amber-300">
                 <span>휴무 보상</span>
@@ -1011,10 +1019,6 @@ function SubscriptionForm({
                 </span>
               </div>
             )}
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">월 총 샐러드</span>
-              <span className="font-medium">{totalSalads}개</span>
-            </div>
             {totalPrice !== null && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">예상 금액</span>
@@ -1312,15 +1316,11 @@ function SubscriptionStatus({
     period.price_per_salad > 0
       ? editPaidTotalSalads * period.price_per_salad
       : null;
-  const editOriginalPaidDeliveryDays =
-    carryoverDaysAvailable > 0
-      ? getPlannedPaidDeliveryDays(frequency, editSelectedDates.length, period, holidaySet, 0)
-      : editPaidDeliveryDays;
   const editOriginalTotalPrice =
     period.price_per_salad > 0 &&
-    carryoverDaysAvailable > 0 &&
-    editOriginalPaidDeliveryDays !== editPaidDeliveryDays
-      ? editOriginalPaidDeliveryDays * salads * period.price_per_salad
+    editCarryoverDaysUsed > 0 &&
+    editTotalSalads * period.price_per_salad !== editTotalPrice
+      ? editTotalSalads * period.price_per_salad
       : null;
 
   const isPaid = paymentStatus === "completed";
@@ -2001,6 +2001,10 @@ function SubscriptionStatus({
                   <span className="text-muted-foreground">배달 횟수</span>
                   <span className="font-medium">{editDeliveryDays}회</span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">월 총 샐러드</span>
+                  <span className="font-medium">{editTotalSalads}개</span>
+                </div>
                 {editCarryoverDaysUsed > 0 && (
                   <div className="flex justify-between text-amber-700 dark:text-amber-300">
                     <span>휴무 보상</span>
@@ -2009,10 +2013,6 @@ function SubscriptionStatus({
                     </span>
                   </div>
                 )}
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">월 총 샐러드</span>
-                  <span className="font-medium">{editTotalSalads}개</span>
-                </div>
                 {editTotalPrice !== null && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">예상 금액</span>
