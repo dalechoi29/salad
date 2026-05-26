@@ -708,8 +708,19 @@ function SubscriptionForm({
 
         let next = [...prev];
 
-        // Skip weekly cap enforcement for custom date selection (frequency === 0)
-        if (frequency !== null && frequency > 0) {
+        const baseDays = getMinDeliveryDaysForFrequency(
+          frequency ?? 0,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
+
+        // Enforce weekly frequency cap only while building up the base schedule.
+        // Once the user has reached baseDays they are adding carryover (compensation)
+        // dates — those are allowed to exceed the per-week frequency cap so that all
+        // available compensation days can actually be selected.
+        // Skip entirely for custom date selection (frequency === 0).
+        if (frequency !== null && frequency > 0 && next.length < baseDays) {
           const weekKey = getWeekMonday(date);
           const sameWeek = prev
             .filter((d) => getWeekMonday(d) === weekKey)
@@ -720,12 +731,6 @@ function SubscriptionForm({
           }
         }
 
-        const baseDays = getMinDeliveryDaysForFrequency(
-          frequency ?? 0,
-          period.delivery_start,
-          period.delivery_end,
-          holidaySet
-        );
         const maxSelectable =
           frequency !== null && frequency > 0 && carryoverDaysAvailable > 0
             ? baseDays + carryoverDaysAvailable
@@ -1223,7 +1228,18 @@ function SubscriptionStatus({
 
         let next = [...prev];
 
-        if (frequency > 0) {
+        const baseDays = getMinDeliveryDaysForFrequency(
+          frequency,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
+
+        // Enforce weekly frequency cap only while building up the base schedule.
+        // Once the user has reached baseDays they are adding carryover (compensation)
+        // dates — those are allowed to exceed the per-week frequency cap so that all
+        // available compensation days can actually be selected.
+        if (frequency > 0 && next.length < baseDays) {
           const weekKey = getWeekMonday(date);
           const sameWeek = prev
             .filter((d) => getWeekMonday(d) === weekKey)
@@ -1234,12 +1250,6 @@ function SubscriptionStatus({
           }
         }
 
-        const baseDays = getMinDeliveryDaysForFrequency(
-          frequency,
-          period.delivery_start,
-          period.delivery_end,
-          holidaySet
-        );
         const maxSelectable =
           frequency > 0 && carryoverDaysAvailable > 0
             ? baseDays + carryoverDaysAvailable

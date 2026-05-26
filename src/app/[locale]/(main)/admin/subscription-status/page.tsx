@@ -8,7 +8,7 @@ import {
   getPeriodStatusBundle,
   type PeriodStatusBundle,
 } from "@/lib/actions/admin";
-import { getKSTDate } from "@/lib/utils";
+import { getKSTDate, formatDateISO } from "@/lib/utils";
 import { redirect } from "next/navigation";
 import { SubscriptionStatusView } from "./subscription-status-view";
 
@@ -40,9 +40,36 @@ export default async function AdminSubscriptionStatusPage() {
 
   const currentMonthStr = `${currentYear}년 ${currentMonth}월`;
   const nextMonthStr = `${nextYear}년 ${nextMonth}월`;
+  const todayStr = formatDateISO(now);
 
-  const currentPeriod = periods.find((p) => p.target_month === currentMonthStr);
-  const nextPeriod = periods.find((p) => p.target_month === nextMonthStr);
+  // Primary: exact target_month string match (e.g. "2026년 5월").
+  // Fallback: date-range match in case the period's target_month was entered
+  // with a different format (e.g. "2026년 05월"). Mirrors the logic in
+  // getActivePeriod() which other pages rely on.
+  const currentPeriod =
+    periods.find((p) => p.target_month === currentMonthStr) ??
+    periods.find(
+      (p) =>
+        p.delivery_start != null &&
+        p.delivery_end != null &&
+        p.delivery_start.slice(0, 10) <= todayStr &&
+        p.delivery_end.slice(0, 10) >= todayStr
+    ) ??
+    null;
+
+  const nextPeriod =
+    periods.find((p) => p.target_month === nextMonthStr) ??
+    periods
+      .filter(
+        (p) =>
+          p !== currentPeriod &&
+          p.delivery_start != null &&
+          p.delivery_start.slice(0, 10) > todayStr
+      )
+      .sort((a, b) =>
+        (a.delivery_start ?? "").localeCompare(b.delivery_start ?? "")
+      )[0] ??
+    null;
 
   const yearsForBlocked = [...new Set([currentYear, nextYear])];
 
