@@ -474,27 +474,27 @@ function getPlannedPaidDeliveryDays(
   holidays: Set<string>,
   carryoverDays: number
 ): number {
-  if (selectedCount > 0) {
-    if (frequency === 0) {
-      return Math.max(0, selectedCount - carryoverDays);
-    }
-
-    const baseDays = getMinDeliveryDaysForFrequency(
-      frequency ?? 0,
-      period.delivery_start,
-      period.delivery_end,
-      holidays
-    );
-    return Math.min(selectedCount, baseDays);
-  }
-
-  if (frequency === 0) return 0;
-  return getMinDeliveryDaysForFrequency(
+  const baseDays = getMinDeliveryDaysForFrequency(
     frequency ?? 0,
     period.delivery_start,
     period.delivery_end,
     holidays
   );
+
+  if (selectedCount > 0) {
+    if (frequency === 0) {
+      return Math.max(0, selectedCount - carryoverDays);
+    }
+    // All available compensation days automatically reduce the paid count
+    // so the user doesn't have to manually pick extra dates to see their
+    // discount. Capped at baseDays so payment never exceeds the plan rate.
+    return Math.min(baseDays, Math.max(0, selectedCount - carryoverDays));
+  }
+
+  if (frequency === 0) return 0;
+  // No dates selected yet — show the estimated paid days upfront with
+  // compensation already deducted.
+  return Math.max(0, baseDays - carryoverDays);
 }
 
 export function SubscriptionView({
