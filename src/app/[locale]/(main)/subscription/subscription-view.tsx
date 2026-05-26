@@ -335,7 +335,16 @@ function DeliveryCalendar({
     : null;
   const endDate = deliveryEnd ? new Date(deliveryEnd + "T00:00:00") : null;
   const previousDateSet = useMemo(() => new Set(previousDates), [previousDates]);
-  const hasPreviousHints = previousDateSet.size > 0;
+  const selectedDateStrings = useMemo(
+    () => new Set(selectedDates.map((d) => formatDateISO(d))),
+    [selectedDates]
+  );
+  // Only show hints when there are previous dates that are NOT already selected
+  // (i.e., visible as gray dots). If all previous dates are covered by the
+  // current selection, the dots are invisible so the legend/description adds no value.
+  const hasPreviousHints =
+    previousDates.length > 0 &&
+    previousDates.some((d) => !selectedDateStrings.has(d));
 
   return (
     <div className="space-y-4">
@@ -766,6 +775,17 @@ function SubscriptionForm({
   const totalSalads = deliveryDayCount * salads;
   const totalPrice =
     period.price_per_salad > 0 ? paidTotalSalads * period.price_per_salad : null;
+  // Price the user would pay with no compensation applied — used for strikethrough
+  const originalPaidDeliveryDays =
+    carryoverDaysAvailable > 0
+      ? getPlannedPaidDeliveryDays(frequency, selectedDates.length, period, holidaySetForCount, 0)
+      : paidDeliveryDayCount;
+  const originalTotalPrice =
+    period.price_per_salad > 0 &&
+    carryoverDaysAvailable > 0 &&
+    originalPaidDeliveryDays !== paidDeliveryDayCount
+      ? originalPaidDeliveryDays * salads * period.price_per_salad
+      : null;
 
   async function handleSubmit() {
     if (frequency === null) return;
@@ -998,8 +1018,15 @@ function SubscriptionForm({
             {totalPrice !== null && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">예상 금액</span>
-                <span className="font-semibold text-primary">
-                  {totalPrice.toLocaleString()}원
+                <span className="flex items-center gap-2">
+                  {originalTotalPrice !== null && (
+                    <span className="text-muted-foreground line-through text-sm">
+                      {originalTotalPrice.toLocaleString()}원
+                    </span>
+                  )}
+                  <span className="font-semibold text-primary">
+                    {totalPrice.toLocaleString()}원
+                  </span>
                 </span>
               </div>
             )}
@@ -1284,6 +1311,16 @@ function SubscriptionStatus({
   const editTotalPrice =
     period.price_per_salad > 0
       ? editPaidTotalSalads * period.price_per_salad
+      : null;
+  const editOriginalPaidDeliveryDays =
+    carryoverDaysAvailable > 0
+      ? getPlannedPaidDeliveryDays(frequency, editSelectedDates.length, period, holidaySet, 0)
+      : editPaidDeliveryDays;
+  const editOriginalTotalPrice =
+    period.price_per_salad > 0 &&
+    carryoverDaysAvailable > 0 &&
+    editOriginalPaidDeliveryDays !== editPaidDeliveryDays
+      ? editOriginalPaidDeliveryDays * salads * period.price_per_salad
       : null;
 
   const isPaid = paymentStatus === "completed";
@@ -1979,8 +2016,15 @@ function SubscriptionStatus({
                 {editTotalPrice !== null && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">예상 금액</span>
-                    <span className="font-semibold text-primary">
-                      {editTotalPrice.toLocaleString()}원
+                    <span className="flex items-center gap-2">
+                      {editOriginalTotalPrice !== null && (
+                        <span className="text-muted-foreground line-through text-sm">
+                          {editOriginalTotalPrice.toLocaleString()}원
+                        </span>
+                      )}
+                      <span className="font-semibold text-primary">
+                        {editTotalPrice.toLocaleString()}원
+                      </span>
                     </span>
                   </div>
                 )}
