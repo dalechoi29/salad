@@ -1466,14 +1466,21 @@ export async function getPeriodStatusBundle(
   if (!periodId) return empty;
 
   const role = await getCallerRole();
-  if (!isAnyAdmin(role)) return empty;
+  if (!isAnyAdmin(role)) {
+    console.warn("[getPeriodStatusBundle] caller is not admin – role:", role);
+    return empty;
+  }
   if (!isSuperAdmin(role) && !(await hasPermission("subscription_status"))) {
+    console.warn("[getPeriodStatusBundle] caller lacks subscription_status permission – role:", role);
     return empty;
   }
 
   const admin = createAdminClient();
 
-  const [{ data: period }, { data: subsRaw }] = await Promise.all([
+  const [
+    { data: period, error: periodErr },
+    { data: subsRaw, error: subsErr },
+  ] = await Promise.all([
     admin
       .from("subscription_periods")
       .select("price_per_salad")
@@ -1487,9 +1494,15 @@ export async function getPeriodStatusBundle(
       .eq("period_id", periodId),
   ]);
 
+  if (periodErr) console.error("[getPeriodStatusBundle] subscription_periods query error:", periodErr);
+  if (subsErr) console.error("[getPeriodStatusBundle] subscriptions query error:", subsErr);
+
   const pricePerSalad = (period?.price_per_salad as number | null) ?? 0;
   const subs = subsRaw ?? [];
-  if (subs.length === 0) return empty;
+  if (subs.length === 0) {
+    console.warn("[getPeriodStatusBundle] no subscriptions found for periodId:", periodId, "subsErr:", subsErr?.message ?? null);
+    return empty;
+  }
 
   const userIds = [...new Set(subs.map((s: any) => s.user_id as string))];
   const subIds = subs.map((s: any) => s.id as string);
