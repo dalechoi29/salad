@@ -101,18 +101,17 @@ export default async function AdminSubscriptionStatusPage() {
     })),
   ];
 
-  // Default tab: once the current month's payment window has closed, focus
-  // the admin on whichever period is still actionable. Concretely, if
-  // `currentPeriod.pay_end` is already in the past and a next period
-  // exists, pre-select the next-month tab. We compare real UTC epochs so
-  // we don't depend on the quirky KST offset produced by `getKSTDate`.
+  // Default tab: stay on the current period while deliveries are still
+  // running (even after the payment window closes). Only switch to the
+  // next-month tab once the current period's delivery window has fully
+  // ended, so the admin always lands on the month being delivered today.
   const nowMs = Date.now();
-  const currentPayEndMs = currentPeriod?.pay_end
-    ? new Date(currentPeriod.pay_end).getTime()
+  const currentDeliveryEndMs = currentPeriod?.delivery_end
+    ? new Date(currentPeriod.delivery_end + "T23:59:59+09:00").getTime()
     : Number.POSITIVE_INFINITY;
-  const currentPayClosed = currentPayEndMs <= nowMs;
+  const currentDeliveryEnded = currentDeliveryEndMs < nowMs;
   const defaultTabIndex =
-    currentPayClosed && nextPeriod ? 1 : 0;
+    currentDeliveryEnded && nextPeriod ? 1 : 0;
 
   return (
     // The view reads `?date=…` via `useSearchParams`, which Next.js requires
