@@ -863,7 +863,7 @@ function SubscriberListSection({
 
 function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
   const isPaid = subscriber.paymentStatus === "completed";
-  const hasCompensation = subscriber.holdDays > 0;
+  const hasCarryover = subscriber.carryoverDays > 0;
   const methodLabel = subscriber.paymentMethod
     ? (PAYMENT_METHOD_LABELS[subscriber.paymentMethod] ??
       subscriber.paymentMethod)
@@ -881,16 +881,9 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
             {isPaid ? "결제 완료" : "미결제"}
           </Badge>
         </div>
-        <div className="flex items-baseline gap-1.5">
-          {hasCompensation && (
-            <span className="text-xs text-muted-foreground line-through">
-              {subscriber.originalPrice.toLocaleString()}원
-            </span>
-          )}
-          <span className="text-sm font-medium text-primary">
-            {subscriber.price.toLocaleString()}원
-          </span>
-        </div>
+        <span className="text-sm font-medium text-primary">
+          {subscriber.price.toLocaleString()}원
+        </span>
       </div>
 
       <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -900,11 +893,11 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
         <span>결제 일시</span>
         <span className="text-foreground">{formatPaidAt(subscriber.paidAt)}</span>
 
-        {hasCompensation && (
+        {hasCarryover && (
           <>
             <span>휴무 보상</span>
             <span className="font-medium text-amber-600 dark:text-amber-400">
-              {subscriber.holdDays}일 적용
+              +{subscriber.carryoverDays}일 (무료)
             </span>
           </>
         )}

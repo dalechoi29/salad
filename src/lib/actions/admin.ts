@@ -1433,12 +1433,9 @@ export type PeriodSubscriber = {
   paymentStatus: "pending" | "completed" | "expired";
   paymentMethod: string | null;
   paidAt: string | null;
-  /** Full price before any store-closure compensation (totalDeliveryDays × salads × pricePerSalad). */
-  originalPrice: number;
-  /** Actual price after subtracting compensation days (originalPrice − holdDays × salads × pricePerSalad). */
   price: number;
-  /** Number of store-closure compensation days applied (hold_billing_extension_days). */
-  holdDays: number;
+  /** Free bonus delivery days carried over from a previous period due to store closure. */
+  carryoverDays: number;
   deliveryDates: string[];
   remainingSlots: number;
 };
@@ -1494,7 +1491,7 @@ export async function getPeriodStatusBundle(
     admin
       .from("subscriptions")
       .select(
-        "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at, hold_billing_extension_days"
+        "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at, carryover_delivery_days"
       )
       .eq("period_id", periodId),
   ]);
@@ -1610,9 +1607,8 @@ export async function getPeriodStatusBundle(
     if (paymentStatus !== "completed" && deliveryDates.length === 0) continue;
 
     const totalDeliveryDays = storedTotalDays || frequency * 4;
-    const holdDays = (sub.hold_billing_extension_days as number | null) ?? 0;
-    const originalPrice = totalDeliveryDays * salads * pricePerSalad;
-    const price = Math.max(0, (totalDeliveryDays - holdDays) * salads * pricePerSalad);
+    const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
+    const price = totalDeliveryDays * salads * pricePerSalad;
 
     result.push({
       subscriptionId: sub.id as string,
@@ -1624,9 +1620,8 @@ export async function getPeriodStatusBundle(
       paymentStatus,
       paymentMethod: (sub.payment_method as string | null) ?? null,
       paidAt: (sub.paid_at as string | null) ?? null,
-      originalPrice,
       price,
-      holdDays,
+      carryoverDays,
       deliveryDates,
       remainingSlots: Math.max(
         0,
