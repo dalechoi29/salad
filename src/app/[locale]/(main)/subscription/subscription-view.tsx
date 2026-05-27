@@ -835,13 +835,28 @@ function SubscriptionForm({
     setIsLoading(true);
     try {
       const effectiveFrequency = frequency === 0 ? 1 : frequency;
+
+      // Pre-selected carryover dates (chosen in a previous month as store-closure
+      // compensation) are already accounted for in the price display via
+      // carryoverDaysAlreadySelected. On submit we must (a) merge them into the
+      // delivery_days being saved so the admin roster shows the complete picture,
+      // and (b) pass the full carryover count so carryover_delivery_days is set
+      // correctly on the subscription record.
+      const delivStart = period.delivery_start ?? "";
+      const delivEnd = period.delivery_end ?? "";
+      const carryoverPreSelected = carryoverUsedDates
+        .filter(d => (!delivStart || d >= delivStart) && (!delivEnd || d <= delivEnd))
+        .map(d => new Date(d + "T00:00:00"));
+
+      const totalCarryoverDaysUsed = carryoverDaysUsed + carryoverDaysAlreadySelected;
+
       const result = await createOrUpdateSubscription(
         period.id,
         effectiveFrequency,
         salads,
         paidDeliveryDayCount > 0 ? paidDeliveryDayCount : undefined,
-        carryoverDaysUsed,
-        carryoverDaysUsed > 0
+        totalCarryoverDaysUsed,
+        totalCarryoverDaysUsed > 0
           ? carryoverReplacement?.sourceSubscriptionId
           : null
       );
@@ -856,10 +871,19 @@ function SubscriptionForm({
         return;
       }
 
-      if (result.subscriptionId && selectedDates.length > 0) {
+      // Merge pre-selected carryover dates with newly selected dates so they all
+      // land in delivery_days for this subscription.
+      const allDates = [
+        ...selectedDates,
+        ...carryoverPreSelected.filter(
+          pd => !selectedDates.some(sd => isSameDay(sd, pd))
+        ),
+      ].sort((a, b) => a.getTime() - b.getTime());
+
+      if (result.subscriptionId && allDates.length > 0) {
         const syncResult = await bulkSaveDeliveryDays(
           result.subscriptionId,
-          datesToWeeklySelections(selectedDates)
+          datesToWeeklySelections(allDates)
         );
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
@@ -867,7 +891,7 @@ function SubscriptionForm({
           return;
         }
 
-        if (carryoverDaysUsed > 0) {
+        if (totalCarryoverDaysUsed > 0) {
           const resolveResult = await resolveCarryoverReplacement(
             result.subscriptionId
           );

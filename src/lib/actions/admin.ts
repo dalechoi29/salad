@@ -1610,6 +1610,11 @@ export async function getPeriodStatusBundle(
     const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
     const price = totalDeliveryDays * salads * pricePerSalad;
 
+    // Carryover dates are free extras on top of the base plan. Exclude them
+    // from the "slots filled" count so remainingSlots reflects only how many
+    // base-plan dates the subscriber still needs to choose.
+    const baseDatesFilled = Math.max(0, deliveryDates.length - carryoverDays);
+
     result.push({
       subscriptionId: sub.id as string,
       userId: sub.user_id as string,
@@ -1626,7 +1631,7 @@ export async function getPeriodStatusBundle(
       remainingSlots: Math.max(
         0,
         totalDeliveryDays -
-          deliveryDates.length -
+          baseDatesFilled -
           (usedCarryoverBySource.get(sub.id as string) ?? 0)
       ),
     });
