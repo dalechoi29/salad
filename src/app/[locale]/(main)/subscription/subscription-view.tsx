@@ -800,12 +800,17 @@ function SubscriptionForm({
   );
 
   const holidaySetForCount = new Set(holidays);
+  // Total carryover entitlement = available (can still pick more from source sub)
+  // + already-selected (dates pre-chosen in the previous month for this period).
+  // Using the sum means the price is correct even when the user picks completely
+  // different dates than the ones they pre-selected, because the entitlement is
+  // about the COUNT of free days, not the specific dates.
   const paidDeliveryDayCount = getPlannedPaidDeliveryDays(
     frequency,
     selectedDates.length,
     period,
     holidaySetForCount,
-    carryoverDaysAvailable
+    carryoverDaysAvailable + carryoverDaysAlreadySelected
   );
   const carryoverDaysUsed = Math.min(
     carryoverDaysAvailable,
@@ -836,18 +841,9 @@ function SubscriptionForm({
     try {
       const effectiveFrequency = frequency === 0 ? 1 : frequency;
 
-      // Pre-selected carryover dates (chosen in a previous month as store-closure
-      // compensation) are already accounted for in the price display via
-      // carryoverDaysAlreadySelected. On submit we must (a) merge them into the
-      // delivery_days being saved so the admin roster shows the complete picture,
-      // and (b) pass the full carryover count so carryover_delivery_days is set
-      // correctly on the subscription record.
-      const delivStart = period.delivery_start ?? "";
-      const delivEnd = period.delivery_end ?? "";
-      const carryoverPreSelected = carryoverUsedDates
-        .filter(d => (!delivStart || d >= delivStart) && (!delivEnd || d <= delivEnd))
-        .map(d => new Date(d + "T00:00:00"));
-
+      // Carryover entitlement = newly-used + pre-selected from previous month.
+      // The specific dates the user picks are their choice — the entitlement is
+      // just a count of free days, not tied to the exact pre-selected dates.
       const totalCarryoverDaysUsed = carryoverDaysUsed + carryoverDaysAlreadySelected;
 
       const result = await createOrUpdateSubscription(
@@ -871,19 +867,10 @@ function SubscriptionForm({
         return;
       }
 
-      // Merge pre-selected carryover dates with newly selected dates so they all
-      // land in delivery_days for this subscription.
-      const allDates = [
-        ...selectedDates,
-        ...carryoverPreSelected.filter(
-          pd => !selectedDates.some(sd => isSameDay(sd, pd))
-        ),
-      ].sort((a, b) => a.getTime() - b.getTime());
-
-      if (result.subscriptionId && allDates.length > 0) {
+      if (result.subscriptionId && selectedDates.length > 0) {
         const syncResult = await bulkSaveDeliveryDays(
           result.subscriptionId,
-          datesToWeeklySelections(allDates)
+          datesToWeeklySelections(selectedDates)
         );
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
@@ -1205,7 +1192,14 @@ function SubscriptionStatus({
       ? subscription.carryover_delivery_days
       : (carryoverReplacement?.availableDays ?? 0);
   const carryoverUsedDates = carryoverReplacement?.usedDates ?? [];
-  const carryoverDaysAlreadySelected = carryoverUsedDates.length;
+  // When the subscription already has carryover_delivery_days recorded in the DB
+  // (e.g. set by the backfill migration or a correct prior save), carryoverDaysAvailable
+  // already represents the full entitlement. Adding usedDates.length on top would
+  // double-count the same days. Only use usedDates.length when the DB value is still 0.
+  const carryoverDaysAlreadySelected =
+    subscription.carryover_delivery_days && subscription.carryover_delivery_days > 0
+      ? 0
+      : carryoverUsedDates.length;
   const carryoverSourceSubscriptionId =
     subscription.carryover_from_subscription_id ??
     carryoverReplacement?.sourceSubscriptionId ??
@@ -1362,7 +1356,7 @@ function SubscriptionStatus({
     editSelectedDates.length,
     period,
     holidaySet,
-    carryoverDaysAvailable
+    carryoverDaysAvailable + carryoverDaysAlreadySelected
   );
   const editCarryoverDaysUsed = Math.min(
     carryoverDaysAvailable,
@@ -1539,14 +1533,8 @@ function SubscriptionStatus({
     try {
       const effectiveFrequency = frequency === 0 ? 1 : frequency;
 
-      // Same carryover-merge logic as NewSubscriptionForm: pre-selected dates
-      // from the previous month must be included in delivery_days and the total
-      // carryover count must be stored on the subscription record.
-      const delivStart = period.delivery_start ?? "";
-      const delivEnd = period.delivery_end ?? "";
-      const carryoverPreSelected = carryoverUsedDates
-        .filter(d => (!delivStart || d >= delivStart) && (!delivEnd || d <= delivEnd))
-        .map(d => new Date(d + "T00:00:00"));
+      // Carryover is a day-count entitlement, not tied to specific dates.
+      // Save only the dates the user actively chose; the count is stored on the record.
       const totalEditCarryoverDaysUsed =
         editCarryoverDaysUsed + carryoverDaysAlreadySelected;
 
@@ -1564,17 +1552,10 @@ function SubscriptionStatus({
         return;
       }
 
-      const allEditDates = [
-        ...editSelectedDates,
-        ...carryoverPreSelected.filter(
-          pd => !editSelectedDates.some(sd => isSameDay(sd, pd))
-        ),
-      ].sort((a, b) => a.getTime() - b.getTime());
-
-      if (result.subscriptionId && allEditDates.length > 0) {
+      if (result.subscriptionId && editSelectedDates.length > 0) {
         const syncResult = await bulkSaveDeliveryDays(
           result.subscriptionId,
-          datesToWeeklySelections(allEditDates)
+          datesToWeeklySelections(editSelectedDates)
         );
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
