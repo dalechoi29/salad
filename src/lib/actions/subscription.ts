@@ -416,6 +416,20 @@ export async function getMyCarryoverReplacement(
     .eq("period_id", periodId)
     .maybeSingle();
 
+  // Always exclude the current subscription from the "already used" count so
+  // that when the user edits their dates the full entitlement is visible, not
+  // just what was stored from a previous (possibly partial) application.
+  const unresolved = await getUnresolvedCarryoverReplacement(
+    supabase,
+    user.id,
+    periodId,
+    existing?.id as string | undefined
+  );
+  if (unresolved) return unresolved;
+
+  // Fallback: source period is fully resolved, but this subscription already
+  // has its allocation stored — return it so the edit form can still show and
+  // save the compensation correctly.
   if (
     existing?.carryover_from_subscription_id &&
     ((existing.carryover_delivery_days as number | null) ?? 0) > 0
@@ -428,12 +442,7 @@ export async function getMyCarryoverReplacement(
     };
   }
 
-  return getUnresolvedCarryoverReplacement(
-    supabase,
-    user.id,
-    periodId,
-    existing?.id as string | undefined
-  );
+  return null;
 }
 
 export async function createOrUpdateSubscription(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useTransition } from "react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
@@ -48,6 +48,7 @@ import {
   EllipsisVertical,
 } from "lucide-react";
 import successAnimationData from "@/assets/animations/success.json";
+import loadingAnimationData from "@/assets/animations/loading-2.json";
 
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import {
@@ -531,6 +532,13 @@ export function SubscriptionView({
 
   const [showSuccess, setShowSuccess] = useState(false);
   const [cancelled, setCancelled] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const [payNavigating, setPayNavigating] = useState(false);
+
+  // Clear the loading flag once the transition (router.refresh) has finished.
+  useEffect(() => {
+    if (payNavigating && !isPending) setPayNavigating(false);
+  }, [payNavigating, isPending]);
 
   if (!period) {
     return (
@@ -562,12 +570,28 @@ export function SubscriptionView({
       <SuccessScreen
         period={period}
         isPaymentWindowOpen={isPaymentWindowOpen}
+        isNavigating={payNavigating}
         onContinue={() => router.push("/")}
         onGoToPay={() => {
           setShowSuccess(false);
-          router.refresh();
+          setPayNavigating(true);
+          startTransition(() => router.refresh());
         }}
       />
+    );
+  }
+
+  // Show a loading animation while router.refresh() is in flight after clicking "지금 결제하기"
+  if (payNavigating) {
+    return (
+      <div className="mx-auto max-w-lg py-16 flex flex-col items-center gap-2">
+        <Lottie
+          animationData={loadingAnimationData}
+          loop
+          autoplay
+          style={{ width: 140, height: 140 }}
+        />
+      </div>
     );
   }
 
@@ -603,11 +627,13 @@ export function SubscriptionView({
 function SuccessScreen({
   period,
   isPaymentWindowOpen,
+  isNavigating = false,
   onContinue,
   onGoToPay,
 }: {
   period: SubscriptionPeriod;
   isPaymentWindowOpen: boolean;
+  isNavigating?: boolean;
   onContinue: () => void;
   onGoToPay: () => void;
 }) {
@@ -636,8 +662,17 @@ function SuccessScreen({
           </div>
           <div className={cn("mt-2 flex gap-2", isPaymentWindowOpen ? "flex-col w-full" : "")}>
             {isPaymentWindowOpen && (
-              <Button className="w-full" onClick={onGoToPay}>
-                <CreditCard className="mr-2 h-4 w-4" />
+              <Button className="w-full" onClick={onGoToPay} disabled={isNavigating}>
+                {isNavigating ? (
+                  <Lottie
+                    animationData={loadingAnimationData}
+                    loop
+                    autoplay
+                    style={{ width: 20, height: 20, marginRight: 8 }}
+                  />
+                ) : (
+                  <CreditCard className="mr-2 h-4 w-4" />
+                )}
                 지금 결제하기
               </Button>
             )}
