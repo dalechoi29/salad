@@ -1538,13 +1538,25 @@ function SubscriptionStatus({
     setIsLoading(true);
     try {
       const effectiveFrequency = frequency === 0 ? 1 : frequency;
+
+      // Same carryover-merge logic as NewSubscriptionForm: pre-selected dates
+      // from the previous month must be included in delivery_days and the total
+      // carryover count must be stored on the subscription record.
+      const delivStart = period.delivery_start ?? "";
+      const delivEnd = period.delivery_end ?? "";
+      const carryoverPreSelected = carryoverUsedDates
+        .filter(d => (!delivStart || d >= delivStart) && (!delivEnd || d <= delivEnd))
+        .map(d => new Date(d + "T00:00:00"));
+      const totalEditCarryoverDaysUsed =
+        editCarryoverDaysUsed + carryoverDaysAlreadySelected;
+
       const result = await createOrUpdateSubscription(
         period.id,
         effectiveFrequency,
         salads,
         editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
-        editCarryoverDaysUsed,
-        editCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null
+        totalEditCarryoverDaysUsed,
+        totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null
       );
       if (result.error) {
         if (handleActionError(result.error, router)) return;
@@ -1552,10 +1564,17 @@ function SubscriptionStatus({
         return;
       }
 
-      if (result.subscriptionId && editSelectedDates.length > 0) {
+      const allEditDates = [
+        ...editSelectedDates,
+        ...carryoverPreSelected.filter(
+          pd => !editSelectedDates.some(sd => isSameDay(sd, pd))
+        ),
+      ].sort((a, b) => a.getTime() - b.getTime());
+
+      if (result.subscriptionId && allEditDates.length > 0) {
         const syncResult = await bulkSaveDeliveryDays(
           result.subscriptionId,
-          datesToWeeklySelections(editSelectedDates)
+          datesToWeeklySelections(allEditDates)
         );
         if (syncResult.error) {
           if (handleActionError(syncResult.error, router)) return;
@@ -1563,7 +1582,7 @@ function SubscriptionStatus({
           return;
         }
 
-        if (editCarryoverDaysUsed > 0) {
+        if (totalEditCarryoverDaysUsed > 0) {
           const resolveResult = await resolveCarryoverReplacement(
             result.subscriptionId
           );

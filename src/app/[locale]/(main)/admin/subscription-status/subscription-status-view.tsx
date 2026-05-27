@@ -897,7 +897,7 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
           <>
             <span>휴무 보상</span>
             <span className="font-medium text-amber-600 dark:text-amber-400">
-              +{subscriber.carryoverDays}일 (무료)
+              +{subscriber.carryoverDays}일
             </span>
           </>
         )}
