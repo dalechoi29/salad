@@ -22,33 +22,29 @@ export default async function SubscriptionPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
-  const profile = await getCurrentProfile();
+  // ── Auth + period resolution run in parallel ────────────────
+  const [{ period: rawPeriod, params }, profile] = await Promise.all([
+    searchParams.then(async (p) => {
+      const period = p.period
+        ? await getSubscriptionPeriodById(p.period)
+        : await getActivePeriod();
+      return { period, params: p };
+    }),
+    getCurrentProfile(),
+  ]);
+
   if (!profile) {
     const locale = await getLocale();
     redirect(`/${locale}/login`);
   }
 
-  const params = await searchParams;
+  const now = getKSTDate();
   const periodIdParam = params.period;
 
-  const now = getKSTDate();
-  let existingSubscription = null;
-  let holidays: string[] = [];
-  let storeClosureDates: string[] = [];
-  let savedDateStrings: string[] = [];
-  let lastPaymentMethod: string | null = null;
-  let carryoverReplacement: CarryoverReplacement | null = null;
-  let openHold = null;
-  let previousDeliveryDates: string[] = [];
-
-  // Determine which period to show.
-  // When no explicit period is requested and the active period is already past
-  // its pay_end (closed phase), new subscribers should see the NEXT upcoming
-  // period so the calendar is editable rather than permanently disabled.
-  let activePeriod = periodIdParam
-    ? await getSubscriptionPeriodById(periodIdParam)
-    : await getActivePeriod();
-
+  // ── Closed-period fallback: new subscribers see the next period ─
+  // When getActivePeriod() falls back to a delivering month whose pay_end has
+  // already passed, show the next upcoming period so the calendar is editable.
+  let activePeriod = rawPeriod;
   if (activePeriod && !periodIdParam) {
     const payEnd = activePeriod.pay_end ? new Date(activePeriod.pay_end) : null;
     if (payEnd && now > payEnd) {
@@ -62,49 +58,69 @@ export default async function SubscriptionPage({
 
   const period = activePeriod;
 
-  if (period) {
-    const deliveryYear = period.delivery_start
-      ? new Date(period.delivery_start + "T00:00:00").getFullYear()
-      : now.getFullYear();
-    const [sub, holidayData, storeClosures, lastPm, carryover] = await Promise.all([
+  if (!period) {
+    return (
+      <SubscriptionView
+        period={null}
+        existingSubscription={null}
+        holidays={[]}
+        storeClosureDates={[]}
+        savedDeliveryDates={[]}
+        lastPaymentMethod={null}
+        carryoverReplacement={null}
+        initialOpenHold={null}
+        holdUiAccess={await getSubscriptionHoldUiAccess()}
+        previousDeliveryDates={[]}
+      />
+    );
+  }
+
+  const deliveryYear = period.delivery_start
+    ? new Date(period.delivery_start + "T00:00:00").getFullYear()
+    : now.getFullYear();
+
+  // ── First batch: everything that doesn't depend on whether sub exists ──
+  const [sub, holidayData, storeClosures, lastPm, carryover, holdUiAccess] =
+    await Promise.all([
       getMySubscription(period.id),
       getHolidays(deliveryYear),
       getStoreClosures(deliveryYear),
       getMyLastPaymentMethod(),
       getMyCarryoverReplacement(period.id),
+      getSubscriptionHoldUiAccess(), // moved into this batch (was sequential before)
     ]);
-    existingSubscription = sub;
-    storeClosureDates = storeClosures.map((c) => c.closure_date);
-    holidays = [
-      ...holidayData.map((h) => h.holiday_date),
-      ...storeClosureDates,
-    ];
-    lastPaymentMethod = lastPm;
-    carryoverReplacement = carryover;
 
-    if (sub) {
-      const [deliveryDays, hold] = await Promise.all([
-        getMyDeliveryDays(sub.id),
-        getOpenSubscriptionHold(sub.id),
-      ]);
-      savedDateStrings = deliveryDaysToDateStrings(deliveryDays);
-      openHold = hold;
-    } else {
-      previousDeliveryDates = await getMyPreviousDeliveryDates(period.id);
-    }
+  const storeClosureDates = storeClosures.map((c) => c.closure_date);
+  const holidays = [
+    ...holidayData.map((h) => h.holiday_date),
+    ...storeClosureDates,
+  ];
+
+  // ── Second batch: depends on whether sub exists ──────────────
+  let savedDateStrings: string[] = [];
+  let openHold = null;
+  let previousDeliveryDates: string[] = [];
+
+  if (sub) {
+    const [deliveryDays, hold] = await Promise.all([
+      getMyDeliveryDays(sub.id),
+      getOpenSubscriptionHold(sub.id),
+    ]);
+    savedDateStrings = deliveryDaysToDateStrings(deliveryDays);
+    openHold = hold;
+  } else {
+    previousDeliveryDates = await getMyPreviousDeliveryDates(period.id);
   }
-
-  const holdUiAccess = await getSubscriptionHoldUiAccess();
 
   return (
     <SubscriptionView
       period={period}
-      existingSubscription={existingSubscription}
+      existingSubscription={sub}
       holidays={holidays}
       storeClosureDates={storeClosureDates}
       savedDeliveryDates={savedDateStrings}
-      lastPaymentMethod={lastPaymentMethod}
-      carryoverReplacement={carryoverReplacement}
+      lastPaymentMethod={lastPm}
+      carryoverReplacement={carryover}
       initialOpenHold={openHold}
       holdUiAccess={holdUiAccess}
       previousDeliveryDates={previousDeliveryDates}
