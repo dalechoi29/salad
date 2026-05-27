@@ -907,7 +907,7 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
           {subscriber.frequencyPerWeek > 0
             ? `주 ${subscriber.frequencyPerWeek}회`
             : "자유"}
-          {" · "}1회 {subscriber.saladsPerDelivery}개 · 총 {subscriber.totalDeliveryDays}일
+          {" · "}1회 {subscriber.saladsPerDelivery}개 · 총 {subscriber.totalDeliveryDays + subscriber.carryoverDays}일
         </span>
 
         <span>선택 날짜</span>
