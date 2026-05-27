@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getLocale } from "next-intl/server";
 import {
   getActivePeriod,
+  getNextApplicablePeriod,
   getMySubscription,
   getMyLastPaymentMethod,
   getSubscriptionPeriodById,
@@ -30,10 +31,6 @@ export default async function SubscriptionPage({
   const params = await searchParams;
   const periodIdParam = params.period;
 
-  const period = periodIdParam
-    ? await getSubscriptionPeriodById(periodIdParam)
-    : await getActivePeriod();
-
   const now = getKSTDate();
   let existingSubscription = null;
   let holidays: string[] = [];
@@ -43,6 +40,27 @@ export default async function SubscriptionPage({
   let carryoverReplacement: CarryoverReplacement | null = null;
   let openHold = null;
   let previousDeliveryDates: string[] = [];
+
+  // Determine which period to show.
+  // When no explicit period is requested and the active period is already past
+  // its pay_end (closed phase), new subscribers should see the NEXT upcoming
+  // period so the calendar is editable rather than permanently disabled.
+  let activePeriod = periodIdParam
+    ? await getSubscriptionPeriodById(periodIdParam)
+    : await getActivePeriod();
+
+  if (activePeriod && !periodIdParam) {
+    const payEnd = activePeriod.pay_end ? new Date(activePeriod.pay_end) : null;
+    if (payEnd && now > payEnd) {
+      const subForClosed = await getMySubscription(activePeriod.id);
+      if (!subForClosed) {
+        const next = await getNextApplicablePeriod(activePeriod.id);
+        if (next) activePeriod = next;
+      }
+    }
+  }
+
+  const period = activePeriod;
 
   if (period) {
     const deliveryYear = period.delivery_start

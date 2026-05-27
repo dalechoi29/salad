@@ -62,6 +62,30 @@ export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
   return (deliveryPeriod as SubscriptionPeriod) ?? null;
 }
 
+/**
+ * Returns the earliest future (or currently-applying) period that a new subscriber
+ * can apply for. Used as a fallback when the active period is already past pay_end
+ * and the user has no existing subscription for it.
+ */
+export async function getNextApplicablePeriod(
+  afterPeriodId: string
+): Promise<SubscriptionPeriod | null> {
+  const supabase = await createClient();
+  const kstNow = getKSTDate();
+  const now = kstNow.toISOString();
+
+  const { data } = await supabase
+    .from("subscription_periods")
+    .select("*")
+    .neq("id", afterPeriodId)
+    .gt("pay_end", now)
+    .order("apply_start", { ascending: true })
+    .limit(1)
+    .single();
+
+  return (data as SubscriptionPeriod) ?? null;
+}
+
 export async function createSubscriptionPeriod(
   period: Omit<SubscriptionPeriod, "id" | "created_at" | "updated_at">
 ): Promise<ActionResult & { id?: string }> {
