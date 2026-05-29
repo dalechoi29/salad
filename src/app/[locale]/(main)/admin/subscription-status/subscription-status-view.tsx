@@ -881,8 +881,31 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
             {isPaid ? "결제 완료" : "미결제"}
           </Badge>
         </div>
-        <span className="text-sm font-medium text-primary">
-          {subscriber.price.toLocaleString()}원
+        <span className="flex items-center gap-2 text-sm font-medium">
+          {subscriber.hasOverpaidCredit ? (
+            // Overpaid group: show actual paid amount (= originalPrice) and a
+            // carry-forward badge. No strikethrough — the discount was never applied.
+            <>
+              <span className="text-primary">
+                {(subscriber.originalPrice ?? subscriber.price).toLocaleString()}원 납부
+              </span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                보상 이월 예정
+              </span>
+            </>
+          ) : (
+            // Discount-applied group: show strikethrough original and actual price.
+            <>
+              {subscriber.originalPrice !== null && (
+                <span className="font-normal text-muted-foreground line-through">
+                  {subscriber.originalPrice.toLocaleString()}원
+                </span>
+              )}
+              <span className="text-primary">
+                {subscriber.price.toLocaleString()}원
+              </span>
+            </>
+          )}
         </span>
       </div>
 
@@ -896,9 +919,25 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
         {hasCarryover && (
           <>
             <span>휴무 보상</span>
-            <span className="font-medium text-amber-600 dark:text-amber-400">
-              +{subscriber.carryoverDays}일
-            </span>
+            {subscriber.hasOverpaidCredit ? (
+              <span className="font-medium text-amber-600 dark:text-amber-400">
+                {subscriber.carryoverDays}일 미적용
+                {" "}(총 {subscriber.carryoverDays * subscriber.saladsPerDelivery}개
+                {subscriber.saladsPerDelivery > 1
+                  ? `, 1회 ${subscriber.saladsPerDelivery}개 신청함`
+                  : ""}
+                ) · 이월 예정
+              </span>
+            ) : (
+              <span className="font-medium text-amber-600 dark:text-amber-400">
+                +{subscriber.carryoverDays}일
+                {" "}(총 {subscriber.carryoverDays * subscriber.saladsPerDelivery}개
+                {subscriber.saladsPerDelivery > 1
+                  ? `, 1회 ${subscriber.saladsPerDelivery}개 신청함`
+                  : ""}
+                )
+              </span>
+            )}
           </>
         )}
 
@@ -907,7 +946,7 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
           {subscriber.frequencyPerWeek > 0
             ? `주 ${subscriber.frequencyPerWeek}회`
             : "자유"}
-          {" · "}1회 {subscriber.saladsPerDelivery}개 · 총 {subscriber.totalDeliveryDays + subscriber.carryoverDays}일
+          {" · "}1회 {subscriber.saladsPerDelivery}개 · 총 {subscriber.totalDeliveryDays + subscriber.carryoverDays}일 · 총 {(subscriber.totalDeliveryDays + subscriber.carryoverDays) * subscriber.saladsPerDelivery}개
         </span>
 
         <span>선택 날짜</span>

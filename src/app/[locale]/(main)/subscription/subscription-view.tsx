@@ -854,7 +854,8 @@ function SubscriptionForm({
         totalCarryoverDaysUsed,
         totalCarryoverDaysUsed > 0
           ? carryoverReplacement?.sourceSubscriptionId
-          : null
+          : null,
+        carryoverReplacement?.compensationCreditIds
       );
 
       if (result.error) {
@@ -1544,7 +1545,8 @@ function SubscriptionStatus({
         salads,
         editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
         totalEditCarryoverDaysUsed,
-        totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null
+        totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null,
+        carryoverReplacement?.compensationCreditIds
       );
       if (result.error) {
         if (handleActionError(result.error, router)) return;

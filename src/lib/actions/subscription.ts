@@ -259,6 +259,8 @@ export type CarryoverReplacement = {
   availableDays: number;
   targetMonth: string;
   usedDates: string[];
+  /** IDs of compensation_credits rows included in availableDays. Applied on subscription save. */
+  compensationCreditIds: string[];
 };
 
 type SubscriptionWithPeriod = {
@@ -420,6 +422,7 @@ async function getUnresolvedCarryoverReplacement(
       availableDays: available,
       targetMonth: sub.subscription_periods?.target_month ?? "",
       usedDates,
+      compensationCreditIds: [],
     };
   }
 
@@ -443,13 +446,43 @@ export async function getMyCarryoverReplacement(
   // Always exclude the current subscription from the "already used" count so
   // that when the user edits their dates the full entitlement is visible, not
   // just what was stored from a previous (possibly partial) application.
-  const unresolved = await getUnresolvedCarryoverReplacement(
-    supabase,
-    user.id,
-    periodId,
-    existing?.id as string | undefined
-  );
-  if (unresolved) return unresolved;
+  // Fetch pending compensation credits for this user in parallel with carryover lookup
+  const [unresolved, { data: pendingCredits }] = await Promise.all([
+    getUnresolvedCarryoverReplacement(
+      supabase,
+      user.id,
+      periodId,
+      existing?.id as string | undefined
+    ),
+    supabase
+      .from("compensation_credits")
+      .select("id, days")
+      .eq("user_id", user.id)
+      .is("applied_to_subscription_id", null),
+  ]);
+
+  const creditRows = (pendingCredits ?? []) as { id: string; days: number }[];
+  const totalCreditDays = creditRows.reduce((sum, r) => sum + r.days, 0);
+  const creditIds = creditRows.map((r) => r.id);
+
+  if (unresolved) {
+    return {
+      ...unresolved,
+      availableDays: unresolved.availableDays + totalCreditDays,
+      compensationCreditIds: creditIds,
+    };
+  }
+
+  // If only compensation credits exist (no store-closure carryover)
+  if (totalCreditDays > 0) {
+    return {
+      sourceSubscriptionId: "",
+      availableDays: totalCreditDays,
+      targetMonth: "",
+      usedDates: [],
+      compensationCreditIds: creditIds,
+    };
+  }
 
   // Fallback: source period is fully resolved, but this subscription already
   // has its allocation stored — return it so the edit form can still show and
@@ -463,6 +496,7 @@ export async function getMyCarryoverReplacement(
       availableDays: (existing.carryover_delivery_days as number | null) ?? 0,
       targetMonth: "",
       usedDates: [],
+      compensationCreditIds: creditIds,
     };
   }
 
@@ -475,7 +509,8 @@ export async function createOrUpdateSubscription(
   saladsPerDelivery: number,
   totalDeliveryDays?: number,
   carryoverDeliveryDays = 0,
-  carryoverFromSubscriptionId?: string | null
+  carryoverFromSubscriptionId?: string | null,
+  compensationCreditIds?: string[]
 ): Promise<ActionResult & { subscriptionId?: string }> {
   const supabase = await createClient();
   const user = await getAuthUser();
@@ -508,38 +543,45 @@ export async function createOrUpdateSubscription(
   const existingCarryover = existing as ExistingCarryoverSubscription | null;
 
   if (normalizedCarryoverDays > 0) {
-    if (!carryoverFromSubscriptionId) {
+    // Compensation-credits-only path: carryoverFromSubscriptionId is "" (empty)
+    // but the user has pending compensation credits covering the days.
+    const isCompensationOnly =
+      !carryoverFromSubscriptionId && (compensationCreditIds?.length ?? 0) > 0;
+
+    if (!carryoverFromSubscriptionId && !isCompensationOnly) {
       return { error: "사용할 수 있는 휴무 보상일이 없습니다" };
     }
 
-    const existingCarryoverDays =
-      existingCarryover?.carryover_delivery_days ?? 0;
-    const isAlreadyStoredCarryover =
-      existingCarryover?.carryover_from_subscription_id ===
-        carryoverFromSubscriptionId &&
-      normalizedCarryoverDays <= existingCarryoverDays;
+    if (!isCompensationOnly) {
+      const existingCarryoverDays =
+        existingCarryover?.carryover_delivery_days ?? 0;
+      const isAlreadyStoredCarryover =
+        existingCarryover?.carryover_from_subscription_id ===
+          carryoverFromSubscriptionId &&
+        normalizedCarryoverDays <= existingCarryoverDays;
 
-    if (!isAlreadyStoredCarryover) {
-      const availableCarryover = await getUnresolvedCarryoverReplacement(
-        supabase,
-        user.id,
-        periodId,
-        existingCarryover?.id
-      );
+      if (!isAlreadyStoredCarryover) {
+        const availableCarryover = await getUnresolvedCarryoverReplacement(
+          supabase,
+          user.id,
+          periodId,
+          existingCarryover?.id
+        );
 
-      // Total entitlement = days still claimable (availableDays) + days already
-      // pre-selected for this period (usedDates). A user whose pre-selected dates
-      // fill their entire entitlement will have availableDays = 0 but
-      // usedDates.length > 0, so we must include both in the cap.
-      const totalEntitlement =
-        availableCarryover.availableDays +
-        (availableCarryover.usedDates?.length ?? 0);
-      if (
-        !availableCarryover ||
-        availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
-        normalizedCarryoverDays > totalEntitlement
-      ) {
-        return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
+        // Total entitlement = days still claimable (availableDays) + days already
+        // pre-selected for this period (usedDates). A user whose pre-selected dates
+        // fill their entire entitlement will have availableDays = 0 but
+        // usedDates.length > 0, so we must include both in the cap.
+        const totalEntitlement =
+          availableCarryover.availableDays +
+          (availableCarryover.usedDates?.length ?? 0);
+        if (
+          !availableCarryover ||
+          availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
+          normalizedCarryoverDays > totalEntitlement
+        ) {
+          return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
+        }
       }
     }
   }
@@ -576,10 +618,23 @@ export async function createOrUpdateSubscription(
         .eq("user_id", user.id);
     }
 
+    // Mark any compensation credits as applied
+    if (compensationCreditIds?.length) {
+      await supabase
+        .from("compensation_credits")
+        .update({
+          applied_to_subscription_id: existing.id,
+          applied_at: new Date().toISOString(),
+        })
+        .in("id", compensationCreditIds)
+        .eq("user_id", user.id);
+    }
+
     revalidatePath("/subscription");
     revalidatePath("/delivery");
     revalidatePath("/");
     revalidatePath("/admin/subscription-status");
+    revalidatePath("/admin/compensation");
     return { success: true, subscriptionId: existing.id };
   } else {
     const { data: inserted, error } = await supabase
@@ -592,7 +647,9 @@ export async function createOrUpdateSubscription(
         total_delivery_days: totalDeliveryDays ?? null,
         carryover_delivery_days: normalizedCarryoverDays,
         carryover_from_subscription_id:
-          normalizedCarryoverDays > 0 ? carryoverFromSubscriptionId : null,
+          normalizedCarryoverDays > 0 && carryoverFromSubscriptionId
+            ? carryoverFromSubscriptionId
+            : null,
         payment_status: "pending",
       })
       .select("id")
@@ -600,10 +657,23 @@ export async function createOrUpdateSubscription(
 
     if (error) return { error: error.message };
 
+    // Mark any compensation credits as applied
+    if (compensationCreditIds?.length) {
+      await supabase
+        .from("compensation_credits")
+        .update({
+          applied_to_subscription_id: inserted.id,
+          applied_at: new Date().toISOString(),
+        })
+        .in("id", compensationCreditIds)
+        .eq("user_id", user.id);
+    }
+
     revalidatePath("/subscription");
     revalidatePath("/delivery");
     revalidatePath("/");
     revalidatePath("/admin/subscription-status");
+    revalidatePath("/admin/compensation");
     return { success: true, subscriptionId: inserted.id };
   }
 }

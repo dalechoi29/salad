@@ -1434,6 +1434,15 @@ export type PeriodSubscriber = {
   paymentMethod: string | null;
   paidAt: string | null;
   price: number;
+  /** Full price before carryover discount (paid + carryover days × salads × price_per_salad). Null when no carryover. */
+  originalPrice: number | null;
+  /**
+   * True when this subscriber has pending (unapplied) compensation credits —
+   * meaning they overpaid and the discount was never applied to their payment.
+   * The admin should show their actual paid amount (= originalPrice) and note
+   * that carry-forward days are owed, rather than showing a strikethrough.
+   */
+  hasOverpaidCredit: boolean;
   /** Free bonus delivery days carried over from a previous period due to store closure. */
   carryoverDays: number;
   deliveryDates: string[];
@@ -1482,6 +1491,7 @@ export async function getPeriodStatusBundle(
   const [
     { data: period, error: periodErr },
     { data: subsRaw, error: subsErr },
+    { data: pendingCreditsRaw },
   ] = await Promise.all([
     admin
       .from("subscription_periods")
@@ -1494,7 +1504,15 @@ export async function getPeriodStatusBundle(
         "id, user_id, frequency_per_week, salads_per_delivery, total_delivery_days, payment_status, payment_method, paid_at, carryover_delivery_days"
       )
       .eq("period_id", periodId),
+    admin
+      .from("compensation_credits")
+      .select("user_id")
+      .is("applied_to_subscription_id", null),
   ]);
+
+  const usersWithPendingCredits = new Set<string>(
+    (pendingCreditsRaw ?? []).map((r: any) => r.user_id as string)
+  );
 
   if (periodErr) console.error("[getPeriodStatusBundle] subscription_periods query error:", periodErr);
   if (subsErr) console.error("[getPeriodStatusBundle] subscriptions query error:", subsErr);
@@ -1609,6 +1627,10 @@ export async function getPeriodStatusBundle(
     const totalDeliveryDays = storedTotalDays || frequency * 4;
     const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
     const price = totalDeliveryDays * salads * pricePerSalad;
+    const originalPrice =
+      carryoverDays > 0 && pricePerSalad > 0
+        ? (totalDeliveryDays + carryoverDays) * salads * pricePerSalad
+        : null;
 
     // Carryover dates are free extras on top of the base plan. Exclude them
     // from the "slots filled" count so remainingSlots reflects only how many
@@ -1626,6 +1648,8 @@ export async function getPeriodStatusBundle(
       paymentMethod: (sub.payment_method as string | null) ?? null,
       paidAt: (sub.paid_at as string | null) ?? null,
       price,
+      originalPrice,
+      hasOverpaidCredit: usersWithPendingCredits.has(sub.user_id as string),
       carryoverDays,
       deliveryDates,
       remainingSlots: Math.max(
@@ -1852,4 +1876,141 @@ export async function getTodaySaladSummary(): Promise<
   }
 
   return Array.from(menuMap.values()).sort((a, b) => b.count - a.count);
+}
+
+// ─── Compensation Credits ─────────────────────────────────────────────────────
+
+export type CompensationCredit = {
+  id: string;
+  userId: string;
+  realName: string;
+  days: number;
+  sourcePeriod: string;
+  reason: string | null;
+  adminNotes: string | null;
+  appliedToSubscriptionId: string | null;
+  appliedAt: string | null;
+  createdAt: string;
+};
+
+export async function getCompensationCredits(): Promise<CompensationCredit[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("compensation_credits")
+    .select(
+      "id, user_id, days, source_period, reason, admin_notes, applied_to_subscription_id, applied_at, created_at, profiles(real_name)"
+    )
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("[getCompensationCredits]", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((row: any) => ({
+    id: row.id as string,
+    userId: row.user_id as string,
+    realName: (row.profiles?.real_name as string | null) ?? row.user_id,
+    days: row.days as number,
+    sourcePeriod: row.source_period as string,
+    reason: (row.reason as string | null) ?? null,
+    adminNotes: (row.admin_notes as string | null) ?? null,
+    appliedToSubscriptionId:
+      (row.applied_to_subscription_id as string | null) ?? null,
+    appliedAt: (row.applied_at as string | null) ?? null,
+    createdAt: row.created_at as string,
+  }));
+}
+
+export async function addCompensationCredit(params: {
+  userId: string;
+  days: number;
+  sourcePeriod: string;
+  reason?: string;
+  adminNotes?: string;
+}): Promise<ActionResult> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase.from("compensation_credits").insert({
+    user_id: params.userId,
+    days: params.days,
+    source_period: params.sourcePeriod,
+    reason: params.reason ?? null,
+    admin_notes: params.adminNotes ?? null,
+  });
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function updateCompensationCredit(
+  id: string,
+  patches: {
+    days?: number;
+    sourcePeriod?: string;
+    reason?: string | null;
+    adminNotes?: string | null;
+  }
+): Promise<ActionResult> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+  const supabase = await createClient();
+  const update: Record<string, unknown> = {};
+  if (patches.days !== undefined) update.days = patches.days;
+  if (patches.sourcePeriod !== undefined)
+    update.source_period = patches.sourcePeriod;
+  if (patches.reason !== undefined) update.reason = patches.reason;
+  if (patches.adminNotes !== undefined) update.admin_notes = patches.adminNotes;
+
+  const { error } = await supabase
+    .from("compensation_credits")
+    .update(update)
+    .eq("id", id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteCompensationCredit(
+  id: string
+): Promise<ActionResult> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("compensation_credits")
+    .delete()
+    .eq("id", id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+/** Returns total pending (unapplied) compensation days for a user. */
+export async function getPendingCompensationDays(
+  userId: string
+): Promise<number> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("compensation_credits")
+    .select("days")
+    .eq("user_id", userId)
+    .is("applied_to_subscription_id", null);
+
+  return (data ?? []).reduce(
+    (sum: number, row: any) => sum + (row.days as number),
+    0
+  );
+}
+
+/** Returns the set of user IDs that have at least one pending credit. */
+export async function getUsersWithPendingCredits(): Promise<Set<string>> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("compensation_credits")
+    .select("user_id")
+    .is("applied_to_subscription_id", null);
+
+  return new Set((data ?? []).map((r: any) => r.user_id as string));
 }

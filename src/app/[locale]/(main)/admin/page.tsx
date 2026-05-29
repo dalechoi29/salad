@@ -21,6 +21,7 @@ import {
   CalendarCheck,
   Salad,
   Pause,
+  Gift,
 } from "lucide-react";
 
 interface AdminMenuItem {
@@ -123,6 +124,13 @@ const adminSections: AdminSection[] = [
         icon: Pause,
         title: "구독 홀드 관리",
         description: "홀드 전역 설정, 허용 사용자 선택, 신청 내역 조회",
+        permission: "subscription_status",
+      },
+      {
+        href: "/admin/compensation",
+        icon: Gift,
+        title: "보상 크레딧 관리",
+        description: "초과 납부 등으로 발생한 무료 배달 보상 일수 관리",
         permission: "subscription_status",
       },
     ],
