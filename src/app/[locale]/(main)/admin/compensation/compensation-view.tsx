@@ -262,7 +262,7 @@ export function CompensationView({ initialCredits, users }: Props) {
                 <Label>사용자</Label>
                 <Select
                   value={form.userId}
-                  onValueChange={(v) => setForm((f) => ({ ...f, userId: v }))}
+                  onValueChange={(v) => setForm((f) => ({ ...f, userId: v ?? "" }))}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="사용자 선택" />
