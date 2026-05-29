@@ -914,17 +914,11 @@ function SubscriptionForm({
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
+          {(carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0) && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-              {carryoverDaysAlreadySelected > 0
-                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAlreadySelected * salads}개가 가격에서 빠져요.`
-                : null}
-              {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
-              {carryoverDaysAvailable > 0
-                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAvailable * salads}개를 이번 달에 넣어드려요.`
-                : null}
+              {`지난번 추가 결제된 샐러드 ${(carryoverDaysAvailable + carryoverDaysAlreadySelected) * salads}개를 이번 달에 넣어드려요.`}
             </div>
-          ) : null}
+          )}
 
         <div className="space-y-3">
             <Label>{t("frequency")}</Label>
@@ -1228,11 +1222,20 @@ function SubscriptionStatus({
   );
   const currentTotalCarryoverDays =
     currentCarryoverDaysUsed + carryoverDaysAlreadySelected;
+  // Compensation reduces the price of existing selections (Model A).
+  // For subs saved before carryover_delivery_days was set (carryoverDaysAlreadySelected > 0),
+  // appliedDeliveryDays holds the raw selected count so we subtract carryover manually.
+  // For properly-saved subs (carryoverDaysAlreadySelected === 0), appliedDeliveryDays is
+  // already the paid count and this subtraction is a no-op.
+  const effectivePaidDays = Math.max(
+    0,
+    appliedDeliveryDays - carryoverDaysAlreadySelected
+  );
   const currentDeliveryDays =
     savedDates.length > 0
-      ? savedDates.length + carryoverDaysAlreadySelected
-      : appliedDeliveryDays + currentTotalCarryoverDays;
-  const totalSalads = appliedDeliveryDays * currentSalads;
+      ? savedDates.length
+      : effectivePaidDays + currentTotalCarryoverDays;
+  const totalSalads = effectivePaidDays * currentSalads;
   const displayedTotalSalads = currentDeliveryDays * currentSalads;
 
   const matchedPresetLabel = detectMatchingPreset(
@@ -1932,17 +1935,11 @@ function SubscriptionStatus({
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
+          {(carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0) && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-              {carryoverDaysAlreadySelected > 0
-                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAlreadySelected * salads}개가 가격에서 빠져요.`
-                : null}
-              {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
-              {carryoverDaysAvailable > 0
-                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAvailable * salads}개를 이번 달에 넣어드려요.`
-                : null}
+              {`지난번 추가 결제된 샐러드 ${(carryoverDaysAvailable + carryoverDaysAlreadySelected) * salads}개를 이번 달에 넣어드려요.`}
             </div>
-          ) : null}
+          )}
 
           {isEditing ? (
             <div className="space-y-4">
@@ -2139,14 +2136,15 @@ function SubscriptionStatus({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">선택한 날짜</span>
                 <span>
-                  {currentDeliveryDays}/{appliedDeliveryDays + currentTotalCarryoverDays}일
+                  {currentDeliveryDays}/{effectivePaidDays + currentTotalCarryoverDays}일
                 </span>
               </div>
               {currentTotalCarryoverDays > 0 && (
                 <div className="flex justify-between text-amber-700 dark:text-amber-300">
                   <span>휴무 보상</span>
                   <span>
-                    결제 대상 {appliedDeliveryDays * currentSalads}개 + 보상 {currentTotalCarryoverDays * currentSalads}개
+                    결제 대상 {effectivePaidDays * currentSalads}개 + 보상{" "}
+                    {currentTotalCarryoverDays * currentSalads}개
                   </span>
                 </div>
               )}
