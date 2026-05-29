@@ -572,9 +572,10 @@ export async function createOrUpdateSubscription(
         // pre-selected for this period (usedDates). A user whose pre-selected dates
         // fill their entire entitlement will have availableDays = 0 but
         // usedDates.length > 0, so we must include both in the cap.
-        const totalEntitlement =
-          availableCarryover.availableDays +
-          (availableCarryover.usedDates?.length ?? 0);
+        const totalEntitlement = availableCarryover
+          ? availableCarryover.availableDays +
+            (availableCarryover.usedDates?.length ?? 0)
+          : 0;
         if (
           !availableCarryover ||
           availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
