@@ -916,17 +916,16 @@ function SubscriptionForm({
           {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
               {carryoverDaysAlreadySelected > 0
-                ? `매장 휴무 보상일 ${carryoverDaysAlreadySelected}일을 이미 선택했어요.`
+                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAlreadySelected * salads}개가 가격에서 빠져요.`
                 : null}
               {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
               {carryoverDaysAvailable > 0
-                ? `매장 휴무로 선택하지 못한 ${carryoverDaysAvailable}일을 이번 달에 추가로 선택할 수 있어요.`
+                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAvailable * salads}개를 이번 달에 넣어드려요.`
                 : null}
-              {" "}추가 결제는 없어요.
             </div>
           ) : null}
 
-          <div className="space-y-3">
+        <div className="space-y-3">
             <Label>{t("frequency")}</Label>
             <div className="flex gap-1">
               {[1, 2, 3, 4, 5].map((n) => (
@@ -1061,7 +1060,7 @@ function SubscriptionForm({
               <div className="flex justify-between text-amber-700 dark:text-amber-300">
                 <span>휴무 보상</span>
                 <span className="font-medium">
-                  결제 대상 {paidDeliveryDayCount}일 + 보상 {totalCarryoverDays}일
+                  결제 대상 {paidDeliveryDayCount * salads}개 + 보상 {totalCarryoverDays * salads}개
                 </span>
               </div>
             )}
@@ -1362,7 +1361,8 @@ function SubscriptionStatus({
     carryoverDaysAvailable,
     Math.max(0, editSelectedDates.length - editPaidDeliveryDays)
   );
-  const editDeliveryDays = editPaidDeliveryDays + editCarryoverDaysUsed;
+  const totalEditCarryoverDays = editCarryoverDaysUsed + carryoverDaysAlreadySelected;
+  const editDeliveryDays = editPaidDeliveryDays + totalEditCarryoverDays;
   const editTotalSalads = editDeliveryDays * salads;
   const editPaidTotalSalads = editPaidDeliveryDays * salads;
   const editTotalPrice =
@@ -1371,7 +1371,7 @@ function SubscriptionStatus({
       : null;
   const editOriginalTotalPrice =
     period.price_per_salad > 0 &&
-    editCarryoverDaysUsed > 0 &&
+    totalEditCarryoverDays > 0 &&
     editTotalSalads * period.price_per_salad !== editTotalPrice
       ? editTotalSalads * period.price_per_salad
       : null;
@@ -1587,7 +1587,7 @@ function SubscriptionStatus({
       if (planChanged && isPaid) {
         setPaymentStatus("pending");
         setSelectedPayment("credit_card");
-        toast.success("플랜이 변경되어 결제를 다시 진행해주세요");
+        toast.success("결제 금액이 변경되었어요. 결제를 다시 진행해주세요.");
       } else {
         toast.success("구독 플랜이 변경되었습니다");
       }
@@ -1933,13 +1933,12 @@ function SubscriptionStatus({
           {carryoverDaysAvailable > 0 || carryoverDaysAlreadySelected > 0 ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
               {carryoverDaysAlreadySelected > 0
-                ? `매장 휴무 보상일 ${carryoverDaysAlreadySelected}일을 이미 선택했어요.`
+                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAlreadySelected * salads}개가 가격에서 빠져요.`
                 : null}
               {carryoverDaysAlreadySelected > 0 && carryoverDaysAvailable > 0 ? " " : ""}
               {carryoverDaysAvailable > 0
-                ? `매장 휴무로 선택하지 못한 ${carryoverDaysAvailable}일을 이번 달에 추가로 선택할 수 있어요.`
+                ? `지난번 추가 결제된 샐러드 ${carryoverDaysAvailable * salads}개를 이번 달에 넣어드려요.`
                 : null}
-              {" "}추가 결제는 없어요.
             </div>
           ) : null}
 
@@ -2064,11 +2063,11 @@ function SubscriptionStatus({
                   <span className="text-muted-foreground">월 총 샐러드</span>
                   <span className="font-medium">{editTotalSalads}개</span>
                 </div>
-                {editCarryoverDaysUsed > 0 && (
+                {totalEditCarryoverDays > 0 && (
                   <div className="flex justify-between text-amber-700 dark:text-amber-300">
                     <span>휴무 보상</span>
                     <span className="font-medium">
-                      결제 대상 {editPaidDeliveryDays}일 + 보상 {editCarryoverDaysUsed}일
+                      결제 대상 {editPaidDeliveryDays * salads}개 + 보상 {totalEditCarryoverDays * salads}개
                     </span>
                   </div>
                 )}
@@ -2145,7 +2144,7 @@ function SubscriptionStatus({
                 <div className="flex justify-between text-amber-700 dark:text-amber-300">
                   <span>휴무 보상</span>
                   <span>
-                    결제 대상 {appliedDeliveryDays}일 + 보상 {currentTotalCarryoverDays}일
+                    결제 대상 {appliedDeliveryDays * currentSalads}개 + 보상 {currentTotalCarryoverDays * currentSalads}개
                   </span>
                 </div>
               )}
@@ -2155,7 +2154,17 @@ function SubscriptionStatus({
               </div>
               <div className="flex justify-between text-lg font-semibold">
                 <span>총 금액</span>
-                <span className="text-primary">
+                <span className="flex items-center gap-2 text-primary">
+                  {currentTotalCarryoverDays > 0 &&
+                    displayedTotalSalads * period.price_per_salad !==
+                      totalSalads * period.price_per_salad && (
+                      <span className="text-sm font-normal text-muted-foreground line-through">
+                        {(
+                          displayedTotalSalads * period.price_per_salad
+                        ).toLocaleString()}
+                        원
+                      </span>
+                    )}
                   {(totalSalads * period.price_per_salad).toLocaleString()}원
                 </span>
               </div>

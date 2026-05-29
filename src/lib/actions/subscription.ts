@@ -527,10 +527,17 @@ export async function createOrUpdateSubscription(
         existingCarryover?.id
       );
 
+      // Total entitlement = days still claimable (availableDays) + days already
+      // pre-selected for this period (usedDates). A user whose pre-selected dates
+      // fill their entire entitlement will have availableDays = 0 but
+      // usedDates.length > 0, so we must include both in the cap.
+      const totalEntitlement =
+        availableCarryover.availableDays +
+        (availableCarryover.usedDates?.length ?? 0);
       if (
         !availableCarryover ||
         availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
-        normalizedCarryoverDays > availableCarryover.availableDays
+        normalizedCarryoverDays > totalEntitlement
       ) {
         return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
       }
