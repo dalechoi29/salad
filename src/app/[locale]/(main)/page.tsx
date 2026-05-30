@@ -123,6 +123,12 @@ async function SubscriptionStatusSection() {
     nxtPeriod ? getSubscriptionDayCounts(nxtPeriod.id) : {},
   ]);
 
+  const nowMs = Date.now();
+  const curDeliveryEndMs = curPeriod?.delivery_end
+    ? new Date(curPeriod.delivery_end + "T23:59:59+09:00").getTime()
+    : Number.POSITIVE_INFINITY;
+  const defaultTabIndex = curDeliveryEndMs < nowMs && nxtPeriod ? 1 : 0;
+
   return (
     <SubscriptionStatusView
       currentPeriod={curPeriod}
@@ -133,6 +139,7 @@ async function SubscriptionStatusSection() {
       showBackButton={false}
       showTitle
       isLoggedIn={!!profile}
+      defaultTabIndex={defaultTabIndex}
     />
   );
 }

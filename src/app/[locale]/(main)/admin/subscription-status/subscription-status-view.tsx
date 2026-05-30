@@ -203,9 +203,16 @@ function getInitialMonday(
     const todayInPeriod = todayStr >= delStart && todayStr <= delEnd;
 
     if (todayInPeriod && currentMonday >= periodMonday) {
-      return isWeekend
-        ? new Date(currentMonday.getTime() + 7 * 86400000)
-        : currentMonday;
+      if (isWeekend) {
+        const nextMonday = new Date(currentMonday.getTime() + 7 * 86400000);
+        // Only advance to next week if it still falls inside the delivery
+        // period — otherwise stay on the current week so the tab label and
+        // the displayed calendar month always match.
+        if (fmtISO(nextMonday) <= delEnd) {
+          return nextMonday;
+        }
+      }
+      return currentMonday;
     }
 
     if (counts) {
@@ -1022,9 +1029,16 @@ export function SubscriptionStatusView({
       counts: Record<string, number>;
       subscribers: PeriodSubscriber[];
     }[] = [];
+    const deliveryMonthLabel = (period: SubscriptionPeriod) => {
+      if (period.delivery_start) {
+        const d = new Date(period.delivery_start + "T00:00:00");
+        return `${d.getMonth() + 1}월`;
+      }
+      return period.target_month.replace(/^\d{4}년\s*/, "");
+    };
     if (currentPeriod) {
       t.push({
-        label: currentPeriod.target_month,
+        label: deliveryMonthLabel(currentPeriod),
         period: currentPeriod,
         counts: currentCounts,
         subscribers: currentSubscribers,
@@ -1032,7 +1046,7 @@ export function SubscriptionStatusView({
     }
     if (nextPeriod) {
       t.push({
-        label: nextPeriod.target_month,
+        label: deliveryMonthLabel(nextPeriod),
         period: nextPeriod,
         counts: nextCounts,
         subscribers: nextSubscribers,
