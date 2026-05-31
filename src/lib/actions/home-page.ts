@@ -213,6 +213,13 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
           ?.title ?? null
       : null;
 
+  const stripData = await getHomeStripData(
+    !!profile,
+    loggedInStripDates,
+    guestStripDates,
+    stripSelections
+  );
+
   return {
     isLoggedIn: !!profile,
     isAdmin,
@@ -239,6 +246,7 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
     stripSelections,
     cutoffDay: cutoff.day,
     cutoffTime: cutoff.time,
+    ...stripData,
   };
 }
 

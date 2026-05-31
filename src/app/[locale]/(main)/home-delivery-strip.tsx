@@ -27,6 +27,8 @@ interface Props {
   cutoffTime: string;
   /** When true, hide menu selection actions (browse-only for guests). */
   guestMode?: boolean;
+  /** Preloaded strip menus from the home page shell (avoids skeleton flash). */
+  initialStripData?: HomeStripData;
 }
 
 const DOW_KO = ["일", "월", "화", "수", "목", "금", "토"];
@@ -130,6 +132,58 @@ function StripMenuSkeleton() {
   );
 }
 
+const PLACEHOLDER_MENU: MenuDetail = {
+  title: "토마토 라구 샐러드",
+  sauce: "허브 갈릭 드레싱",
+  protein: 25,
+  kcal: 300,
+};
+
+/** Measure the two tallest real layouts: selected (1 menu + button) vs browse (2 menus). */
+function StripHeightRuler({
+  selectedRef,
+  browseRef,
+}: {
+  selectedRef: React.RefObject<HTMLDivElement | null>;
+  browseRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const panelPad = "w-full py-3.5 pl-2.5 pr-3.5";
+
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 overflow-hidden opacity-0"
+    >
+      <div ref={selectedRef} className={panelPad}>
+        <DetailContent
+          dateIso="2000-01-01"
+          dateLabel="6월 00일(월요일)"
+          statusBadge={null}
+          showClosedMessage={false}
+          showPendingMessage={false}
+          selectedMenus={[PLACEHOLDER_MENU]}
+          availableMenus={[]}
+          showSelectButton={false}
+          showChangeButton
+        />
+      </div>
+      <div ref={browseRef} className={panelPad}>
+        <DetailContent
+          dateIso="2000-01-01"
+          dateLabel="6월 00일(월요일)"
+          statusBadge={null}
+          showClosedMessage={false}
+          showPendingMessage={false}
+          selectedMenus={[]}
+          availableMenus={[PLACEHOLDER_MENU, PLACEHOLDER_MENU]}
+          showSelectButton={false}
+          showChangeButton={false}
+        />
+      </div>
+    </div>
+  );
+}
+
 function DetailContent({
   dateIso,
   dateLabel,
@@ -158,7 +212,7 @@ function DetailContent({
             </Badge>
           )}
         </div>
-        {showClosedMessage && (
+        {showClosedMessage && !hasAvailableBlock && (
           <p className="text-sm text-muted-foreground">메뉴 선택 기간이 지났어요.</p>
         )}
         {showPendingMessage && (
@@ -207,17 +261,18 @@ export function HomeDeliveryStrip({
   cutoffDay,
   cutoffTime,
   guestMode = false,
+  initialStripData,
 }: Props) {
   const hydration = useHomeStripHydration();
   const [menuDetailByDate, setMenuDetailByDate] = useState<
     Record<string, MenuDetail[]>
-  >({});
+  >(initialStripData?.menuDetailByDate ?? {});
   const [availableMenusByDate, setAvailableMenusByDate] = useState<
     Record<string, MenuDetail[]>
-  >({});
+  >(initialStripData?.availableMenusByDate ?? {});
   const [guestBrowseMenusByDate, setGuestBrowseMenusByDate] = useState<
     Record<string, MenuDetail[]>
-  >({});
+  >(initialStripData?.guestBrowseMenusByDate ?? {});
 
   const mergeStripData = useCallback((data: HomeStripData) => {
     setMenuDetailByDate(data.menuDetailByDate);
@@ -225,22 +280,36 @@ export function HomeDeliveryStrip({
     setGuestBrowseMenusByDate(data.guestBrowseMenusByDate);
   }, []);
 
+  const initialStripDataKey = initialStripData
+    ? `${Object.keys(initialStripData.guestBrowseMenusByDate).length}|${Object.keys(initialStripData.menuDetailByDate).length}|${Object.keys(initialStripData.availableMenusByDate).length}`
+    : "";
+
+  useEffect(() => {
+    if (initialStripData) mergeStripData(initialStripData);
+  }, [initialStripDataKey, initialStripData, mergeStripData]);
+
   useEffect(() => {
     if (!hydration) return;
     return hydration.registerHydrate(mergeStripData);
   }, [hydration, mergeStripData]);
 
-  const stripDataPending = hydration?.stripDataPending ?? false;
+  const stripDataPending =
+    hydration?.stripDataPending ?? !initialStripData;
+  const guestBrowseByDate =
+    Object.keys(guestBrowseMenusByDate).length > 0
+      ? guestBrowseMenusByDate
+      : (initialStripData?.guestBrowseMenusByDate ?? {});
   const stripMenuDetailByDate = guestMode ? {} : menuDetailByDate;
   const stripAvailableMenusByDate = guestMode
-    ? guestBrowseMenusByDate
+    ? guestBrowseByDate
     : availableMenusByDate;
 
   const selectedSet = new Set(selectedDateSet);
   const chipListRef = useRef<HTMLDivElement>(null);
   const contentPanelRef = useRef<HTMLDivElement>(null);
   const stripRootRef = useRef<HTMLDivElement>(null);
-  const measureRef = useRef<HTMLDivElement>(null);
+  const measureSelectedRef = useRef<HTMLDivElement>(null);
+  const measureBrowseRef = useRef<HTMLDivElement>(null);
   const chipDragRef = useRef({
     dragging: false,
     startY: 0,
@@ -297,11 +366,11 @@ export function HomeDeliveryStrip({
     const dates =
       deliveryDatesKey.length > 0 ? deliveryDatesKey.split(",") : [];
     const next = pickDefaultDate(dates, todayStr);
-    setActiveDate((cur) => (cur && dates.includes(cur) ? cur : next));
-    setDisplayDate((cur) => (cur && dates.includes(cur) ? cur : next));
+    setActiveDate(next);
+    setDisplayDate(next);
     setPanelVisible(true);
     autoAdvancePausedRef.current = false;
-  }, [deliveryDatesKey, todayStr]);
+  }, [deliveryDatesKey, guestMode, todayStr]);
 
   useEffect(() => {
     activeDateRef.current = activeDate;
@@ -333,29 +402,19 @@ export function HomeDeliveryStrip({
     return !hasMenu && !selectionOpen;
   };
 
-  const referenceClosedDate =
-    deliveryDates.find(
-      (d) =>
-        isClosedNoMenuDate(d) &&
-        d >= todayStr &&
-        (stripAvailableMenusByDate[d]?.length ?? 0) > 0
-    ) ??
-    deliveryDates.find((d) => isClosedNoMenuDate(d) && d >= todayStr) ??
-    null;
-
-  const referenceClosedMenus = referenceClosedDate
-    ? (stripAvailableMenusByDate[referenceClosedDate] ?? []).slice(0, 2)
-    : [];
-
   useLayoutEffect(() => {
-    const el = measureRef.current;
-    if (!el) return;
-    const sync = () => setFixedPanelH(el.offsetHeight);
+    const sync = () => {
+      const selectedH = measureSelectedRef.current?.offsetHeight ?? 0;
+      const browseH = measureBrowseRef.current?.offsetHeight ?? 0;
+      const h = Math.max(selectedH, browseH);
+      if (h > 0) setFixedPanelH(h);
+    };
     sync();
     const ro = new ResizeObserver(sync);
-    ro.observe(el);
+    if (measureSelectedRef.current) ro.observe(measureSelectedRef.current);
+    if (measureBrowseRef.current) ro.observe(measureBrowseRef.current);
     return () => ro.disconnect();
-  }, [referenceClosedDate, referenceClosedMenus.length]);
+  }, []);
 
   useEffect(() => {
     const el = stripRootRef.current;
@@ -374,7 +433,7 @@ export function HomeDeliveryStrip({
     const el = chipListRef.current;
     if (!el || !activeDate) return;
     scrollChipIntoView(el, activeDate, true);
-  }, [activeDate, deliveryDates]);
+  }, [activeDate, deliveryDatesKey]);
 
   // Scroll / swipe on the content panel — one date per scroll, fixed brief lock after each step.
   useEffect(() => {
@@ -519,7 +578,7 @@ export function HomeDeliveryStrip({
       {/* Left: scrollable chip column — padding on outer shell so scroll never clips it */}
       <div
         style={fixedPanelH != null ? { height: fixedPanelH, minHeight: fixedPanelH } : undefined}
-        className="flex w-[80px] shrink-0 flex-col py-2.5 pl-2.5 pr-1.5"
+        className="flex w-[80px] shrink-0 flex-col py-3.5 pl-3 pr-2"
       >
         <div
           ref={chipListRef}
@@ -575,11 +634,8 @@ export function HomeDeliveryStrip({
 
             let chipCls = "bg-muted/60 text-muted-foreground";
             if (isActive) {
-              chipCls = hasMenu
-                ? "bg-green-500 text-white"
-                : selectionOpen
-                  ? "bg-amber-400 text-white"
-                  : "bg-muted text-muted-foreground";
+              chipCls =
+                "bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-sm shadow-green-600/25";
             } else if (!isPast) {
               chipCls = hasMenu
                 ? "bg-green-100 text-green-800"
@@ -638,28 +694,12 @@ export function HomeDeliveryStrip({
         ref={contentPanelRef}
         className="relative flex min-h-0 min-w-0 flex-1 touch-none flex-col overscroll-contain"
       >
-        {referenceClosedDate && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 overflow-hidden opacity-0"
-          >
-            <div ref={measureRef} className="w-full py-2.5 pl-2 pr-3">
-              <DetailContent
-                dateIso={referenceClosedDate}
-                dateLabel={formatDateFull(referenceClosedDate)}
-                statusBadge={null}
-                showClosedMessage
-                showPendingMessage={false}
-                selectedMenus={[]}
-                availableMenus={referenceClosedMenus}
-                showSelectButton={false}
-                showChangeButton={false}
-              />
-            </div>
-          </div>
-        )}
+        <StripHeightRuler
+          selectedRef={measureSelectedRef}
+          browseRef={measureBrowseRef}
+        />
 
-        <div className="flex h-full min-h-0 flex-1 flex-col justify-center py-2.5 pl-2 pr-3">
+        <div className="flex h-full min-h-0 flex-1 flex-col justify-center py-3.5 pl-2.5 pr-3.5">
           <div
             className={cn(
               "transition-opacity duration-200 ease-in-out",

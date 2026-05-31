@@ -33,7 +33,7 @@ export type HomePageShellData = {
   stripSelections: MenuSelection[];
   cutoffDay: number;
   cutoffTime: string;
-};
+} & HomeStripData;
 
 export function shellToHomeContentProps(shell: HomePageShellData) {
   return {
@@ -61,6 +61,11 @@ export function shellToHomeContentProps(shell: HomePageShellData) {
     selectedDatesInPeriod: shell.selectedDatesInPeriod,
     cutoffDay: shell.cutoffDay,
     cutoffTime: shell.cutoffTime,
+    initialStripData: {
+      menuDetailByDate: shell.menuDetailByDate,
+      availableMenusByDate: shell.availableMenusByDate,
+      guestBrowseMenusByDate: shell.guestBrowseMenusByDate,
+    },
   };
 }
 

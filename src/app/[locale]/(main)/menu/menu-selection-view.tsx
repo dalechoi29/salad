@@ -40,7 +40,7 @@ import {
   getMyFavoriteIds,
 } from "@/lib/actions/menu";
 import { handleActionError } from "@/lib/handle-action-error";
-import { Skeleton } from "@/components/ui/skeleton";
+import { MenuPageLoading, MenuWeekLoading } from "./menu-page-loading";
 import { useMenuWeekHydration } from "./menu-week-hydration";
 
 const DIETARY_LABELS: Record<string, string> = {
@@ -95,10 +95,10 @@ function PerDaySideSection({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="mt-1 overflow-hidden rounded-lg border border-dashed">
+    <div className="mt-1 overflow-hidden rounded-lg border border-dashed border-muted-foreground/25 bg-muted/40">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-3 py-3 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/40"
+        className="flex w-full items-center justify-between px-3 py-3 text-left text-sm font-medium text-foreground/80 transition-colors hover:bg-muted/60 active:bg-muted/70"
       >
         <span className="inline-flex items-center gap-1.5">
           <span>밥/샌드위치</span>
@@ -312,8 +312,8 @@ export function MenuSelectionView({
   }, []);
 
   useEffect(() => {
-    if (!hasInitialData) loadData();
-  }, [loadData, hasInitialData]);
+    if (!hasInitialData && !weekDataPending) loadData();
+  }, [loadData, hasInitialData, weekDataPending]);
 
   // Lazy-load a single week's menus + selections on demand. Safe to call
   // redundantly: in-flight requests and already-loaded weeks are deduped.
@@ -527,41 +527,7 @@ export function MenuSelectionView({
   }
 
   if (loading) {
-    return (
-      <div className="mx-auto max-w-2xl space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-28" />
-          <Skeleton className="h-6 w-20 rounded-full" />
-        </div>
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-8 rounded" />
-          <Skeleton className="h-5 w-32" />
-          <Skeleton className="h-8 w-8 rounded" />
-        </div>
-        {[1, 2, 3].map((i) => (
-          <Card key={i}>
-            <CardHeader className="pb-2">
-              <Skeleton className="h-5 w-24" />
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {[1, 2].map((j) => (
-                <div key={j} className="flex gap-3 rounded-lg border p-2.5">
-                  <Skeleton className="h-24 w-24 rounded-lg" />
-                  <div className="flex-1 space-y-2 py-1">
-                    <Skeleton className="h-5 w-6" />
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-3 w-20" />
-                  </div>
-                  <div className="flex items-center">
-                    <Skeleton className="h-8 w-16 rounded-md" />
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    );
+    return <MenuPageLoading />;
   }
 
   // Include open dates + closed dates that already have a selection (counts as done).
@@ -764,27 +730,7 @@ export function MenuSelectionView({
       {/* ── Step 3: Compact day cards ────────────────────────────────── */}
       <div className="mt-4 space-y-3">
         {weekLoading === currentWeekKey ? (
-          [1, 2].map((i) => (
-            <Card key={`skel-${i}`}>
-              <CardHeader className="pb-2">
-                <Skeleton className="h-5 w-24" />
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {[1, 2].map((j) => (
-                  <div key={j} className="flex gap-3 rounded-lg border p-2">
-                    <Skeleton className="h-14 w-14 rounded-lg" />
-                    <div className="flex-1 space-y-1.5 py-1">
-                      <Skeleton className="h-4 w-28" />
-                      <Skeleton className="h-3 w-20" />
-                    </div>
-                    <div className="flex items-center">
-                      <Skeleton className="h-7 w-16 rounded-md" />
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ))
+          <MenuWeekLoading />
         ) : (
           currentWeekDates.map((dateStr) => {
             const allMenusForDay = getMenusForDate(dateStr);

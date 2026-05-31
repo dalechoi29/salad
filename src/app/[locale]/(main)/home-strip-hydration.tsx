@@ -35,19 +35,38 @@ const HomeStripHydrationContext =
 
 export function HomeStripHydrationProvider({
   children,
-  stripDataPending = true,
+  initialStripData,
+  stripDataPending = !initialStripData,
 }: {
   children: ReactNode;
+  initialStripData?: HomeStripData;
   stripDataPending?: boolean;
 }) {
   const hydrateRef = useRef<StripHydrateFn | null>(null);
   const [stripData, setStripData] = useState({
-    ...emptyMaps,
+    ...(initialStripData ?? emptyMaps),
     pending: stripDataPending,
   });
 
+  useEffect(() => {
+    if (initialStripData) {
+      setStripData({ ...initialStripData, pending: stripDataPending });
+    }
+  }, [initialStripData, stripDataPending]);
+
+  const stripDataRef = useRef(stripData);
+  stripDataRef.current = stripData;
+
   const registerHydrate = useCallback((fn: StripHydrateFn) => {
     hydrateRef.current = fn;
+    const data = stripDataRef.current;
+    if (!data.pending) {
+      fn({
+        menuDetailByDate: data.menuDetailByDate,
+        availableMenusByDate: data.availableMenusByDate,
+        guestBrowseMenusByDate: data.guestBrowseMenusByDate,
+      });
+    }
     return () => {
       if (hydrateRef.current === fn) hydrateRef.current = null;
     };

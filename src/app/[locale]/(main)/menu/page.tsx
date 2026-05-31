@@ -1,9 +1,9 @@
 import { Suspense } from "react";
-import { getMenuPageShellData } from "@/lib/actions/menu-page";
+import { getMenuPageShellData, getMenuPageWeekData } from "@/lib/actions/menu-page";
 import { shellToViewProps } from "@/lib/menu-page-types";
+import { MenuPageLoading } from "./menu-page-loading";
 import { MenuSelectionView } from "./menu-selection-view";
 import { MenuWeekHydrationProvider } from "./menu-week-hydration";
-import { MenuWeekServerLoader } from "./menu-week-loader";
 
 export default async function MenuPage({
   searchParams,
@@ -17,7 +17,7 @@ export default async function MenuPage({
       : undefined;
 
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<MenuPageLoading />}>
       <MenuPageContent focusDate={focusDate} />
     </Suspense>
   );
@@ -25,17 +25,18 @@ export default async function MenuPage({
 
 async function MenuPageContent({ focusDate }: { focusDate?: string }) {
   const shell = await getMenuPageShellData(focusDate);
+  const weekData = await getMenuPageWeekData(
+    shell.initialWeekStart,
+    shell.initialWeekEnd
+  );
 
   return (
     <MenuWeekHydrationProvider>
-      <MenuSelectionView {...shellToViewProps(shell)} weekDataPending />
-      <Suspense fallback={null}>
-        <MenuWeekServerLoader
-          weekStart={shell.initialWeekStart}
-          weekEnd={shell.initialWeekEnd}
-          weekKey={shell.initialWeekMonday}
-        />
-      </Suspense>
+      <MenuSelectionView
+        {...shellToViewProps(shell)}
+        initialMenus={weekData.menus}
+        initialSelections={weekData.selections}
+      />
     </MenuWeekHydrationProvider>
   );
 }

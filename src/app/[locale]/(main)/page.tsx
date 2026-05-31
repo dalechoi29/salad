@@ -28,11 +28,11 @@ import { HomeFridgeCard } from "./home-fridge-card";
 import { HomeDeliveryStrip } from "./home-delivery-strip";
 import { HomeDeliveryActions } from "./home-delivery-actions";
 import { HomeStripHydrationProvider } from "./home-strip-hydration";
-import { HomeStripServerLoader } from "./home-strip-loader";
 import { SubscriptionStatusView } from "./admin/subscription-status/subscription-status-view";
 import { HomeSkeleton } from "./home-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DailyMenu, SubscriptionPeriod, DailySaladStatus } from "@/types";
+import type { HomeStripData } from "@/lib/home-page-types";
 
 export default function HomePage() {
   return (
@@ -44,23 +44,19 @@ export default function HomePage() {
 
 async function HomePageContent() {
   const shell = await getHomePageShellData();
-  const showDeliverySchedule = shell.isLoggedIn
-    ? shell.loggedInStripDates.length > 0
-    : shell.guestStripDates.length > 0;
+  const initialStripData: HomeStripData = {
+    menuDetailByDate: shell.menuDetailByDate,
+    availableMenusByDate: shell.availableMenusByDate,
+    guestBrowseMenusByDate: shell.guestBrowseMenusByDate,
+  };
 
   return (
-    <HomeStripHydrationProvider stripDataPending={showDeliverySchedule}>
+    <HomeStripHydrationProvider
+      key={shell.isLoggedIn ? "auth" : "guest"}
+      initialStripData={initialStripData}
+      stripDataPending={false}
+    >
       <HomeContent {...shellToHomeContentProps(shell)} />
-      {showDeliverySchedule && (
-        <Suspense fallback={null}>
-          <HomeStripServerLoader
-            isLoggedIn={shell.isLoggedIn}
-            loggedInStripDates={shell.loggedInStripDates}
-            guestStripDates={shell.guestStripDates}
-            stripSelections={shell.stripSelections}
-          />
-        </Suspense>
-      )}
     </HomeStripHydrationProvider>
   );
 }
@@ -143,6 +139,7 @@ function HomeContent({
   selectedDatesInPeriod,
   cutoffDay,
   cutoffTime,
+  initialStripData,
 }: {
   isLoggedIn: boolean;
   isAdmin: boolean;
@@ -168,6 +165,7 @@ function HomeContent({
   selectedDatesInPeriod: string[];
   cutoffDay: number;
   cutoffTime: string;
+  initialStripData: HomeStripData;
 }) {
   const t = useTranslations("home");
   const tSub = useTranslations("subscription");
@@ -334,12 +332,14 @@ function HomeContent({
           </div>
 
           <HomeDeliveryStrip
+            key={`${isLoggedIn ? "in" : "guest"}-${stripDates.join(",")}`}
             deliveryDates={stripDates}
             selectedDateSet={stripSelectedDates}
             todayStr={todayStr}
             cutoffDay={cutoffDay}
             cutoffTime={cutoffTime}
             guestMode={!isLoggedIn}
+            initialStripData={initialStripData}
           />
 
           <HomeDeliveryActions
