@@ -35,7 +35,7 @@ import {
   type DateDeliveryDetails,
 } from "@/lib/actions/admin";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDateCompact } from "@/lib/utils";
+import { formatDateCompact, cn } from "@/lib/utils";
 import type { SubscriptionPeriod, Holiday } from "@/types";
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -378,13 +378,161 @@ function MonthCalendar({
   const canGoPrev = firstMonday ? currentMonday > firstMonday : true;
   const canGoNext = lastMonday ? currentMonday < lastMonday : true;
 
-  function navigateWeek(direction: number) {
-    const newMonday = new Date(currentMonday);
-    newMonday.setDate(newMonday.getDate() + direction * 7);
-    if (direction < 0 && firstMonday && newMonday < firstMonday) return;
-    if (direction > 0 && lastMonday && newMonday > lastMonday) return;
-    setCurrentMonday(newMonday);
-  }
+  const WEEK_FADE_MS = 200;
+  const SCROLL_STEP_THRESHOLD = 36;
+  const SCROLL_STEP_LOCK_MS = 400;
+  const [weekGridVisible, setWeekGridVisible] = useState(true);
+  const weekNavLockRef = useRef(false);
+  const calendarContentRef = useRef<HTMLDivElement>(null);
+  const suppressDayClickRef = useRef(false);
+
+  const navigateWeek = useCallback(
+    (direction: number) => {
+      if (weekNavLockRef.current) return;
+      const newMonday = new Date(currentMonday);
+      newMonday.setDate(newMonday.getDate() + direction * 7);
+      if (direction < 0 && firstMonday && newMonday < firstMonday) return;
+      if (direction > 0 && lastMonday && newMonday > lastMonday) return;
+
+      weekNavLockRef.current = true;
+      setWeekGridVisible(false);
+      window.setTimeout(() => {
+        setCurrentMonday(newMonday);
+        setWeekGridVisible(true);
+        window.setTimeout(() => {
+          weekNavLockRef.current = false;
+        }, WEEK_FADE_MS);
+      }, WEEK_FADE_MS);
+    },
+    [currentMonday, firstMonday, lastMonday]
+  );
+
+  useEffect(() => {
+    const el = calendarContentRef.current;
+    if (!el) return;
+
+    let wheelAccum = 0;
+    let lockedUntil = 0;
+    let touchStartY = 0;
+    let touchTracking = false;
+    let pointerStartY = 0;
+    let pointerDragging = false;
+    let pointerWasDrag = false;
+    let pointerId = 0;
+
+    const stepFromDelta = (delta: number) => {
+      const now = Date.now();
+      if (now < lockedUntil) return;
+      if (Math.abs(delta) < SCROLL_STEP_THRESHOLD) return;
+      navigateWeek(delta > 0 ? 1 : -1);
+      lockedUntil = now + SCROLL_STEP_LOCK_MS;
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const now = Date.now();
+      if (now < lockedUntil) {
+        wheelAccum = 0;
+        return;
+      }
+      // Trackpad swipes may report on deltaX or deltaY depending on gesture.
+      const delta =
+        Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      wheelAccum += delta;
+      if (Math.abs(wheelAccum) < SCROLL_STEP_THRESHOLD) return;
+      const direction = wheelAccum > 0 ? 1 : -1;
+      navigateWeek(direction);
+      wheelAccum = 0;
+      lockedUntil = now + SCROLL_STEP_LOCK_MS;
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0]?.clientY ?? 0;
+      touchTracking = true;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touchTracking) return;
+      const y = e.touches[0]?.clientY ?? touchStartY;
+      if (Math.abs(y - touchStartY) > 8) e.preventDefault();
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      touchTracking = false;
+      const endY = e.changedTouches[0]?.clientY;
+      if (endY == null) return;
+      stepFromDelta(touchStartY - endY);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      pointerStartY = e.clientY;
+      pointerDragging = true;
+      pointerWasDrag = false;
+      pointerId = e.pointerId;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!pointerDragging || e.pointerId !== pointerId) return;
+      const dy = e.clientY - pointerStartY;
+      if (Math.abs(dy) > 5) {
+        if (!pointerWasDrag) {
+          el.setPointerCapture(pointerId);
+          pointerWasDrag = true;
+        }
+        e.preventDefault();
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!pointerDragging || e.pointerId !== pointerId) return;
+      pointerDragging = false;
+      if (pointerWasDrag) {
+        suppressDayClickRef.current = true;
+        window.setTimeout(() => {
+          suppressDayClickRef.current = false;
+        }, 0);
+        try {
+          el.releasePointerCapture(pointerId);
+        } catch {
+          /* already released */
+        }
+        stepFromDelta(pointerStartY - e.clientY);
+      }
+      pointerWasDrag = false;
+    };
+
+    const onPointerCancel = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      pointerDragging = false;
+      pointerWasDrag = false;
+      try {
+        el.releasePointerCapture(pointerId);
+      } catch {
+        /* already released */
+      }
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerCancel);
+
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [navigateWeek]);
 
   function getDateForDay(dayIndex: number): Date {
     const d = new Date(currentMonday);
@@ -426,6 +574,7 @@ function MonthCalendar({
   }, []);
 
   async function handleDateClick(dateStr: string, count: number) {
+    if (suppressDayClickRef.current) return;
     if (count === 0) return;
     if (!isLoggedIn) {
       router.push("/login");
@@ -528,8 +677,16 @@ function MonthCalendar({
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-5 gap-2">
+        <CardContent
+          ref={calendarContentRef}
+          className="cursor-grab touch-none overscroll-contain active:cursor-grabbing"
+        >
+          <div
+            className={cn(
+              "grid grid-cols-5 gap-2 transition-opacity duration-200 ease-in-out",
+              weekGridVisible ? "opacity-100" : "opacity-0"
+            )}
+          >
             {DAY_LABELS.map((label, i) => {
               const dateObj = getDateForDay(i);
               const dateNum = dateObj.getDate();

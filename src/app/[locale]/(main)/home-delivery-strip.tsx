@@ -239,6 +239,7 @@ export function HomeDeliveryStrip({
   const selectedSet = new Set(selectedDateSet);
   const chipListRef = useRef<HTMLDivElement>(null);
   const contentPanelRef = useRef<HTMLDivElement>(null);
+  const stripRootRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const chipDragRef = useRef({
     dragging: false,
@@ -256,6 +257,29 @@ export function HomeDeliveryStrip({
   const autoAdvancePausedRef = useRef(false);
   const fadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeDateRef = useRef<string | null>(defaultDate);
+  const stripInViewRef = useRef(true);
+  const shouldScrollChipRef = useRef(false);
+
+  function scrollChipIntoView(
+    chipList: HTMLDivElement,
+    dateStr: string,
+    smooth: boolean
+  ) {
+    const chip = chipList.querySelector<HTMLElement>(`[data-date="${dateStr}"]`);
+    if (!chip) return;
+    const chipTop = chip.offsetTop;
+    const chipBottom = chipTop + chip.offsetHeight;
+    const viewTop = chipList.scrollTop;
+    const viewBottom = viewTop + chipList.clientHeight;
+    if (chipTop < viewTop) {
+      chipList.scrollTo({ top: chipTop, behavior: smooth ? "smooth" : "auto" });
+    } else if (chipBottom > viewBottom) {
+      chipList.scrollTo({
+        top: chipBottom - chipList.clientHeight,
+        behavior: smooth ? "smooth" : "auto",
+      });
+    }
+  }
 
   const deliveryDatesKey = deliveryDates.join(",");
 
@@ -277,7 +301,10 @@ export function HomeDeliveryStrip({
   }, [activeDate]);
 
   const selectDate = useCallback((dateStr: string, manual = false) => {
-    if (manual) autoAdvancePausedRef.current = true;
+    if (manual) {
+      autoAdvancePausedRef.current = true;
+      shouldScrollChipRef.current = true;
+    }
     setActiveDate(dateStr);
   }, []);
 
@@ -327,17 +354,24 @@ export function HomeDeliveryStrip({
   }, [referenceClosedDate, referenceClosedMenus.length]);
 
   useEffect(() => {
+    const el = stripRootRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        stripInViewRef.current = entry.isIntersecting;
+      },
+      { threshold: 0.15 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     const el = chipListRef.current;
-    if (!el || !activeDate) return;
-
-    if (deliveryDates[0] === activeDate) {
-      el.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-
-    const chip = el.querySelector<HTMLElement>(`[data-date="${activeDate}"]`);
-    chip?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [activeDate, deliveryDates]);
+    if (!el || !activeDate || !shouldScrollChipRef.current) return;
+    shouldScrollChipRef.current = false;
+    scrollChipIntoView(el, activeDate, true);
+  }, [activeDate]);
 
   // Scroll / swipe on the content panel — one date per scroll, fixed brief lock after each step.
   useEffect(() => {
@@ -438,7 +472,7 @@ export function HomeDeliveryStrip({
     if (deliveryDates.length <= 1) return;
 
     const id = setInterval(() => {
-      if (autoAdvancePausedRef.current) return;
+      if (!stripInViewRef.current || autoAdvancePausedRef.current) return;
       setActiveDate((cur) => {
         if (!cur) return deliveryDates[0] ?? null;
         const idx = deliveryDates.indexOf(cur);
@@ -475,6 +509,7 @@ export function HomeDeliveryStrip({
 
   return (
     <div
+      ref={stripRootRef}
       style={cardHeight}
       className="flex items-stretch gap-1 overflow-hidden overscroll-contain rounded-xl ring-1 ring-foreground/10"
     >

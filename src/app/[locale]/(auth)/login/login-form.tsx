@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,8 @@ const authInputClass =
 const authButtonClass =
   "w-full border-0 bg-gradient-to-r from-green-500 to-emerald-600 text-base font-semibold text-white shadow-md shadow-green-600/25 transition-all duration-200 hover:from-green-600 hover:to-emerald-700 hover:shadow-lg hover:shadow-green-600/30 focus-visible:ring-[3px] focus-visible:ring-green-400/40 active:scale-[0.98] disabled:opacity-70";
 
+const AUTO_SUBMIT_DELAY_MS = 120;
+
 function extractLocalPart(value: string): string {
   return value.split("@")[0]?.trim() ?? "";
 }
@@ -29,8 +31,10 @@ export function LoginForm({ titleId }: { titleId?: string }) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [localPart, setLocalPart] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
+  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("salad_pending_email");
@@ -38,12 +42,51 @@ export function LoginForm({ titleId }: { titleId?: string }) {
     emailRef.current?.focus();
   }, []);
 
-  const fullEmail = localPart
-    ? `${localPart.toLowerCase()}@${DEFAULT_DOMAIN}`
-    : "";
+  const scheduleAutoSubmit = useCallback(() => {
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+    }
+    autoSubmitTimerRef.current = setTimeout(() => {
+      autoSubmitTimerRef.current = null;
+      if (isLoading) return;
+      const domLocal = extractLocalPart(emailRef.current?.value ?? "");
+      if (domLocal && domLocal !== localPart) {
+        setLocalPart(domLocal);
+      }
+      const email = domLocal || localPart.trim();
+      const password = passwordRef.current?.value ?? "";
+      if (!email || !/^\d{4}$/.test(password)) return;
+      formRef.current?.requestSubmit();
+    }, AUTO_SUBMIT_DELAY_MS);
+  }, [isLoading, localPart]);
+
+  // Credential autofill on iOS/Android may land after mount without input events.
+  useEffect(() => {
+    const timers = [200, 500, 1000].map((ms) =>
+      setTimeout(() => scheduleAutoSubmit(), ms)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [scheduleAutoSubmit]);
+
+  useEffect(() => {
+    scheduleAutoSubmit();
+    return () => {
+      if (autoSubmitTimerRef.current) {
+        clearTimeout(autoSubmitTimerRef.current);
+      }
+    };
+  }, [localPart, scheduleAutoSubmit]);
 
   function handleLocalPartChange(value: string) {
     setLocalPart(extractLocalPart(value));
+  }
+
+  function handleEmailInput(e: React.FormEvent<HTMLInputElement>) {
+    handleLocalPartChange(e.currentTarget.value);
+  }
+
+  function handlePasswordInput() {
+    scheduleAutoSubmit();
   }
 
   function handleEmailKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -55,7 +98,13 @@ export function LoginForm({ titleId }: { titleId?: string }) {
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!localPart.trim()) {
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+    }
+    const effectiveLocal =
+      extractLocalPart(emailRef.current?.value ?? "") || localPart.trim();
+    if (!effectiveLocal) {
       toast.error("이메일을 입력해 주세요.");
       emailRef.current?.focus();
       return;
@@ -63,7 +112,10 @@ export function LoginForm({ titleId }: { titleId?: string }) {
 
     setIsLoading(true);
     const formData = new FormData(e.currentTarget);
-    formData.set("email", fullEmail);
+    formData.set(
+      "email",
+      `${effectiveLocal.toLowerCase()}@${DEFAULT_DOMAIN}`
+    );
 
     try {
       const result = await login(formData);
@@ -116,7 +168,7 @@ export function LoginForm({ titleId }: { titleId?: string }) {
         <p className="text-sm text-muted-foreground">{t("loginSubtitle")}</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email-local">{t("email")}</Label>
@@ -129,9 +181,11 @@ export function LoginForm({ titleId }: { titleId?: string }) {
               <Input
                 ref={emailRef}
                 id="email-local"
+                name="username"
                 type="text"
                 value={localPart}
                 onChange={(e) => handleLocalPartChange(e.target.value)}
+                onInput={handleEmailInput}
                 onKeyDown={handleEmailKeyDown}
                 placeholder={t("emailLocalPlaceholder")}
                 required
@@ -139,6 +193,7 @@ export function LoginForm({ titleId }: { titleId?: string }) {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
+                enterKeyHint="next"
                 className="h-full min-w-0 flex-1 border-0 bg-transparent pl-3 shadow-none focus-visible:border-transparent focus-visible:ring-0"
               />
               <span className="shrink-0 truncate pr-3 text-xs text-muted-foreground sm:text-sm">
@@ -160,6 +215,9 @@ export function LoginForm({ titleId }: { titleId?: string }) {
               placeholder={t("passwordPlaceholder")}
               required
               autoComplete="current-password"
+              enterKeyHint="go"
+              onInput={handlePasswordInput}
+              onChange={handlePasswordInput}
               className={authInputClass}
             />
           </div>
