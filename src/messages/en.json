@@ -37,6 +37,8 @@
     "realName": "Real Name",
     "nickname": "Nickname",
     "loginTitle": "Healthy Meal",
+    "loginSubtitle": "Sign in with your company email",
+    "emailLocalPlaceholder": "Enter the part before @",
     "signupTitle": "Sign Up",
     "passwordPlaceholder": "Enter 4-digit password",
     "emailPlaceholder": "Enter corporate email",

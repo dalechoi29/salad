@@ -359,6 +359,27 @@ export async function getMyMenuSelections(
   return (data as MenuSelection[]) ?? [];
 }
 
+/** Lightweight selections for menu page — no nested menu joins. */
+export async function getMyMenuSelectionsSummary(
+  startDate: string,
+  endDate: string
+): Promise<MenuSelection[]> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+
+  if (!user) return [];
+
+  const { data } = await supabase
+    .from("user_menu_selections")
+    .select("id, user_id, daily_menu_id, delivery_date, quantity, created_at")
+    .eq("user_id", user.id)
+    .gte("delivery_date", startDate)
+    .lte("delivery_date", endDate)
+    .order("delivery_date");
+
+  return (data as MenuSelection[]) ?? [];
+}
+
 export async function updateMenuQuantity(
   dailyMenuId: string,
   deliveryDate: string,

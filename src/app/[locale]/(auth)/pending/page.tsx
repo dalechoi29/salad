@@ -8,7 +8,7 @@ export default function PendingPage() {
   const t = useTranslations("auth");
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-6">
         <Card>
           <CardContent className="flex flex-col items-center gap-4 pt-8 pb-8">

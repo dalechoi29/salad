@@ -1,86 +1,69 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/actions/auth";
-import { getAllowedDomains } from "@/lib/actions/admin";
 import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import { Loader2, Sprout } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-export function LoginForm() {
+const DEFAULT_DOMAIN = "siemens-healthineers.com";
+
+const authInputClass =
+  "border-input/80 bg-background/50 transition-all duration-200 hover:border-green-400/60 focus-visible:border-green-500 focus-visible:ring-[3px] focus-visible:ring-green-500/25 dark:bg-background/40";
+
+const authButtonClass =
+  "w-full border-0 bg-gradient-to-r from-green-500 to-emerald-600 text-base font-semibold text-white shadow-md shadow-green-600/25 transition-all duration-200 hover:from-green-600 hover:to-emerald-700 hover:shadow-lg hover:shadow-green-600/30 focus-visible:ring-[3px] focus-visible:ring-green-400/40 active:scale-[0.98] disabled:opacity-70";
+
+function extractLocalPart(value: string): string {
+  return value.split("@")[0]?.trim() ?? "";
+}
+
+export function LoginForm({ titleId }: { titleId?: string }) {
   const t = useTranslations("auth");
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [email, setEmail] = useState("");
-  const [domains, setDomains] = useState<string[]>([]);
-  const [showSuggestion, setShowSuggestion] = useState(false);
-  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [localPart, setLocalPart] = useState("");
+  const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("salad_pending_email");
-    if (saved) setEmail(saved);
-    getAllowedDomains().then((data) => {
-      setDomains(data.map((d: any) => d.domain));
-    });
+    if (saved) setLocalPart(extractLocalPart(saved));
+    emailRef.current?.focus();
   }, []);
 
-  const filteredDomains = useMemo(() => {
-    const typed = email.split("@")[1] ?? "";
-    return domains.filter((d) => d.startsWith(typed));
-  }, [domains, email]);
+  const fullEmail = localPart
+    ? `${localPart.toLowerCase()}@${DEFAULT_DOMAIN}`
+    : "";
 
-  function handleEmailChange(value: string) {
-    setEmail(value);
-    setHighlightIdx(-1);
-    if (value.includes("@") && !value.split("@")[1]?.includes(".")) {
-      setShowSuggestion(true);
-    } else {
-      setShowSuggestion(false);
-    }
+  function handleLocalPartChange(value: string) {
+    setLocalPart(extractLocalPart(value));
   }
 
-  function applySuggestion(domain: string) {
-    const localPart = email.split("@")[0];
-    setEmail(`${localPart}@${domain}`);
-    setShowSuggestion(false);
-    setHighlightIdx(-1);
-    passwordRef.current?.focus();
-  }
-
-  function handleEmailKeyDown(e: React.KeyboardEvent) {
-    if (!showSuggestion || filteredDomains.length === 0) return;
-
-    if (e.key === "ArrowDown") {
+  function handleEmailKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && localPart.trim()) {
       e.preventDefault();
-      setHighlightIdx((prev) =>
-        prev < filteredDomains.length - 1 ? prev + 1 : 0
-      );
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setHighlightIdx((prev) =>
-        prev > 0 ? prev - 1 : filteredDomains.length - 1
-      );
-    } else if (e.key === "Enter" && highlightIdx >= 0) {
-      e.preventDefault();
-      applySuggestion(filteredDomains[highlightIdx]);
-    } else if (e.key === "Escape") {
-      setShowSuggestion(false);
-      setHighlightIdx(-1);
+      passwordRef.current?.focus();
     }
   }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!localPart.trim()) {
+      toast.error("이메일을 입력해 주세요.");
+      emailRef.current?.focus();
+      return;
+    }
+
     setIsLoading(true);
     const formData = new FormData(e.currentTarget);
-    const submittedEmail = formData.get("email") as string;
-    setEmail(submittedEmail);
+    formData.set("email", fullEmail);
 
     try {
       const result = await login(formData);
@@ -123,48 +106,50 @@ export function LoginForm() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col items-center gap-1">
-        <div className="flex items-center gap-2">
-          <Sprout className="h-6 w-6 text-primary" />
-          <span className="text-lg font-semibold">{t("loginTitle")}</span>
+      <div className="flex flex-col items-center gap-2 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-green-500/15 to-emerald-600/10">
+          <Sprout className="h-7 w-7 text-green-600 dark:text-green-400" />
         </div>
+        <h1 id={titleId} className="text-xl font-semibold tracking-tight">
+          {t("loginTitle")}
+        </h1>
+        <p className="text-sm text-muted-foreground">{t("loginSubtitle")}</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="email">{t("email")}</Label>
-            <div className="relative">
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                value={email}
-                onChange={(e) => handleEmailChange(e.target.value)}
-                onKeyDown={handleEmailKeyDown}
-                onBlur={() => setTimeout(() => { setShowSuggestion(false); setHighlightIdx(-1); }, 150)}
-                placeholder={t("emailPlaceholder")}
-                required
-                autoComplete="off"
-              />
-              {showSuggestion && filteredDomains.length > 0 && (
-                <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border bg-popover shadow-md">
-                  {filteredDomains.map((domain, idx) => (
-                    <button
-                      key={domain}
-                      type="button"
-                      className={`flex w-full items-center px-3 py-2 text-sm ${idx === highlightIdx ? "bg-accent" : "hover:bg-accent"}`}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => applySuggestion(domain)}
-                      onMouseEnter={() => setHighlightIdx(idx)}
-                    >
-                      {email.split("@")[0]}@{domain}
-                    </button>
-                  ))}
-                </div>
+            <Label htmlFor="email-local">{t("email")}</Label>
+            <div
+              className={cn(
+                "flex h-12 items-center overflow-hidden rounded-lg border border-input/80 bg-background/50 transition-all duration-200",
+                "hover:border-green-400/60 focus-within:border-green-500 focus-within:ring-[3px] focus-within:ring-green-500/25"
               )}
+            >
+              <Input
+                ref={emailRef}
+                id="email-local"
+                type="text"
+                value={localPart}
+                onChange={(e) => handleLocalPartChange(e.target.value)}
+                onKeyDown={handleEmailKeyDown}
+                placeholder={t("emailLocalPlaceholder")}
+                required
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="h-full flex-1 border-0 bg-transparent shadow-none focus-visible:border-transparent focus-visible:ring-0"
+              />
+              <span className="hidden shrink-0 pr-3 text-sm text-muted-foreground sm:inline">
+                @{DEFAULT_DOMAIN}
+              </span>
             </div>
+            <p className="text-xs text-muted-foreground sm:hidden">
+              @{DEFAULT_DOMAIN}
+            </p>
           </div>
+
           <div className="space-y-2">
             <Label htmlFor="password">{t("password")}</Label>
             <Input
@@ -178,12 +163,17 @@ export function LoginForm() {
               placeholder={t("passwordPlaceholder")}
               required
               autoComplete="current-password"
+              className={authInputClass}
             />
           </div>
         </div>
 
         <div className="space-y-3">
-          <Button type="submit" className="w-full" disabled={isLoading}>
+          <Button
+            type="submit"
+            disabled={isLoading}
+            className={authButtonClass}
+          >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {isLoading ? "로그인 중..." : t("login")}
           </Button>
@@ -191,7 +181,7 @@ export function LoginForm() {
             <p className="text-center text-sm text-muted-foreground">
               <Link
                 href="/signup"
-                className="text-primary underline-offset-4 hover:underline"
+                className="font-medium text-green-600 underline-offset-4 transition-colors hover:text-green-700 hover:underline dark:text-green-400 dark:hover:text-green-300"
               >
                 {t("signup")}
               </Link>

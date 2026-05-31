@@ -212,6 +212,27 @@ export async function getMyDeliveryDaysBySubscriptionIds(
   return grouped;
 }
 
+/** All delivery-day rows for the current user, grouped by subscription. */
+export async function getMyDeliveryDaysGrouped(): Promise<
+  Record<string, DeliveryDay[]>
+> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return {};
+
+  const { data } = await supabase
+    .from("delivery_days")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("week_start");
+
+  const grouped: Record<string, DeliveryDay[]> = {};
+  for (const row of (data as DeliveryDay[]) ?? []) {
+    (grouped[row.subscription_id] ??= []).push(row);
+  }
+  return grouped;
+}
+
 export async function getMyDeliveryDateStrings(): Promise<string[]> {
   const supabase = await createClient();
   const user = await getAuthUser();

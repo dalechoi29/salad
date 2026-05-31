@@ -16,7 +16,7 @@ export function SubscriptionsListView({
   const router = useRouter();
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
+    <div className="mx-auto max-w-lg space-y-4">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.back()}>
           <ArrowLeft className="h-5 w-5" />

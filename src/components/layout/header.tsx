@@ -1,6 +1,6 @@
 "use client";
 
-import { Sprout, LogOut } from "lucide-react";
+import { Sprout, LogOut, LogIn } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
@@ -32,11 +32,18 @@ export function Header() {
         <div className="flex items-center gap-1">
           <FontSizeToggle />
           <ThemeToggle />
-          {user && (
+          {user ? (
             <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleLogout}>
               <LogOut className="h-4 w-4" />
               <span className="sr-only">{tAuth("logout")}</span>
             </Button>
+          ) : (
+            <Link href="/login" className="inline-flex">
+              <Button variant="ghost" size="icon" className="h-9 w-9">
+                <LogIn className="h-4 w-4" />
+                <span className="sr-only">{tAuth("login")}</span>
+              </Button>
+            </Link>
           )}
         </div>
       </div>

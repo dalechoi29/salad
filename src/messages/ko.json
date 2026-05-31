@@ -37,6 +37,8 @@
     "realName": "실명",
     "nickname": "닉네임",
     "loginTitle": "건강한 끼니",
+    "loginSubtitle": "회사 이메일로 로그인해 주세요",
+    "emailLocalPlaceholder": "이메일 앞부분 입력",
     "signupTitle": "회원가입",
     "passwordPlaceholder": "4자리 비밀번호 입력",
     "emailPlaceholder": "회사 이메일 입력",

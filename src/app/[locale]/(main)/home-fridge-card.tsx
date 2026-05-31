@@ -12,21 +12,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2, Refrigerator, ImageIcon, X } from "lucide-react";
-import { updateDailySaladStatus } from "@/lib/actions/admin";
+import { updateDailySaladStatus, getCompanyUsers } from "@/lib/actions/admin";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
 interface HomeFridgeCardProps {
   todayStr: string;
-  companyUsers: { id: string; realName: string }[];
   currentUserName: string;
 }
 
 export function HomeFridgeCard({
   todayStr,
-  companyUsers,
   currentUserName,
 }: HomeFridgeCardProps) {
+  const [companyUsers, setCompanyUsers] = useState<
+    { id: string; realName: string }[]
+  >([]);
   const [dismissed, setDismissed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [location, setLocation] = useState("");
@@ -36,6 +37,12 @@ export function HomeFridgeCard({
   const [helpers, setHelpers] = useState<string[]>([currentUserName]);
   const [helperInput, setHelperInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
+
+  useEffect(() => {
+    void getCompanyUsers().then((users) =>
+      setCompanyUsers(users as { id: string; realName: string }[])
+    );
+  }, []);
 
   const suggestions = useMemo(() => {
     if (!helperInput.trim()) return [];

@@ -109,6 +109,7 @@ export function PickupView({
     for (const s of selections) {
       const menu = (s.daily_menu_assignment as any)?.menu;
       if (!s.delivery_date || !menu?.id) continue;
+      if (dateSet.has(s.delivery_date)) continue; // guard against duplicate dates
       dateSet.add(s.delivery_date);
       items.push({
         date: s.delivery_date,

@@ -7,8 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -32,17 +31,14 @@ import {
   Shield,
   MessageSquare,
   KeyRound,
+  ChevronRight,
+  CalendarDays,
 } from "lucide-react";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { updateNickname, logout, changePassword } from "@/lib/actions/auth";
-import { toggleFavorite } from "@/lib/actions/menu";
-import { deleteReview } from "@/lib/actions/review";
-import { deletePost } from "@/lib/actions/community";
-import { handleActionError } from "@/lib/handle-action-error";
-import { ReviewEditDialog } from "@/components/shared/review-edit-dialog";
-import { SubscriptionCard, FavoriteItem, ReviewItem, PostItem } from "./my-list-items";
+import { SubscriptionCard } from "./my-list-items";
 import type { Profile, SubscriptionPeriod, MenuFavorite, Review, Post } from "@/types";
 import type { SubscriptionWithDetails } from "./page";
 
@@ -68,14 +64,13 @@ export function MyPageContent({
   const t = useTranslations("myPage");
   const router = useRouter();
 
-  const [favorites, setFavorites] = useState(initialFavorites);
-  const [reviews, setReviews] = useState(initialReviews);
-  const [posts, setPosts] = useState(initialPosts);
+  const favorites = initialFavorites;
+  const reviews = initialReviews;
+  const posts = initialPosts;
   const [nicknameDialog, setNicknameDialog] = useState(false);
   const [newNickname, setNewNickname] = useState(profile?.nickname ?? "");
   const [isSavingNickname, setIsSavingNickname] = useState(false);
   const [displayNickname, setDisplayNickname] = useState(profile?.nickname ?? "User");
-  const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [passwordDialog, setPasswordDialog] = useState(false);
   const [currentPw, setCurrentPw] = useState("");
@@ -87,7 +82,6 @@ export function MyPageContent({
     try {
       const result = await updateNickname(newNickname);
       if (result.error) {
-        if (handleActionError(result.error, router)) return;
         toast.error(result.error);
         return;
       }
@@ -97,45 +91,6 @@ export function MyPageContent({
     } finally {
       setIsSavingNickname(false);
     }
-  }
-
-  async function handleRemoveFavorite(menuId: string) {
-    const result = await toggleFavorite(menuId);
-    if (result.error) {
-      if (handleActionError(result.error, router)) return;
-      toast.error(result.error);
-      return;
-    }
-    setFavorites((prev) => prev.filter((f) => f.menu_id !== menuId));
-    toast.success("즐겨찾기가 해제되었습니다");
-  }
-
-  async function handleDeleteReview(reviewId: string) {
-    const result = await deleteReview(reviewId);
-    if (result.error) {
-      if (handleActionError(result.error, router)) return;
-      toast.error(result.error);
-      return;
-    }
-    setReviews((prev) => prev.filter((r) => r.id !== reviewId));
-    toast.success("리뷰가 삭제되었습니다");
-  }
-
-  function handleReviewUpdated(updated: Review) {
-    setReviews((prev) =>
-      prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r))
-    );
-  }
-
-  async function handleDeletePost(postId: string) {
-    const result = await deletePost(postId);
-    if (result.error) {
-      if (handleActionError(result.error, router)) return;
-      toast.error(result.error);
-      return;
-    }
-    setPosts((prev) => prev.filter((p) => p.id !== postId));
-    toast.success("게시글이 삭제되었습니다");
   }
 
   async function handleChangePassword() {
@@ -165,7 +120,7 @@ export function MyPageContent({
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-lg space-y-3">
       <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
 
       {/* Profile Card */}
@@ -200,18 +155,15 @@ export function MyPageContent({
         </CardHeader>
       </Card>
 
-      {/* Subscriptions */}
+      {/* Subscriptions — show only the most recent one */}
       {subscriptions.length > 0 ? (
-        <div className="space-y-2">
-          {subscriptions.map((entry) => (
-            <SubscriptionCard key={entry.subscription.id} entry={entry} />
-          ))}
-          {subscriptions.length > 1 && (
-            <Link href="/my/subscriptions" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
-              구독 이력 보기
-            </Link>
-          )}
-        </div>
+        <SubscriptionCard
+          key={subscriptions[0].subscription.id}
+          entry={subscriptions[0]}
+          onSkipDone={(newSkipped) => {
+            subscriptions[0].skippedDates = newSkipped;
+          }}
+        />
       ) : (
         <Link href="/subscription" className="block">
           <Card className="transition-colors hover:bg-accent/50">
@@ -221,123 +173,82 @@ export function MyPageContent({
               </div>
               <div className="flex-1">
                 <CardTitle className="text-base">구독 신청</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  아직 활성 구독이 없습니다
-                </p>
+                <p className="text-sm text-muted-foreground">아직 활성 구독이 없습니다</p>
               </div>
             </CardHeader>
           </Card>
         </Link>
       )}
 
-      {/* Favorite Menus */}
-      <div className="space-y-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-          <Heart className="h-4 w-4" />
-          {t("favoriteMenus")}
+      {/* Navigation Menu — 내 구독 (only shown when there is subscription history to browse) */}
+      {(subscriptions[0]?.totalSubscriptionCount ?? 0) > 1 && (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <p className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-foreground/60">
+            내 구독
+          </p>
+          <Link
+            href="/my/subscriptions"
+            className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+          >
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
+              <CalendarDays className="h-5 w-5 text-foreground/70" />
+            </div>
+            <span className="flex-1 text-base font-medium">구독 이력</span>
+            <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+          </Link>
+        </div>
+      )}
+
+      {/* Navigation Menu — 내 활동 */}
+      <div className="overflow-hidden rounded-xl border bg-card">
+        <p className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-foreground/60">
+          내 활동
+        </p>
+
+        {/* 즐겨찾기 메뉴 */}
+        <Link
+          href="/my/favorites"
+          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
+            <Heart className="h-5 w-5 text-foreground/70" />
+          </div>
+          <span className="flex-1 text-base font-medium">{t("favoriteMenus")}</span>
           {favorites.length > 0 && (
-            <Badge variant="secondary" className="text-xs">
-              {favorites.length}
-            </Badge>
+            <Badge variant="secondary" className="mr-1">{favorites.length}</Badge>
           )}
-        </h2>
-        {favorites.length === 0 ? (
-          <Card>
-            <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
-              <p className="text-sm">즐겨찾기한 메뉴가 없습니다</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            <Card>
-              <CardContent className="p-0">
-                {favorites.slice(0, 1).map((fav) => (
-                  <FavoriteItem
-                    key={fav.id}
-                    fav={fav}
-                    onRemove={handleRemoveFavorite}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-            {favorites.length > 1 && (
-              <Link href="/my/favorites" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
-                더보기
-              </Link>
-            )}
-          </>
-        )}
-      </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+        </Link>
 
-      {/* My Reviews */}
-      <div className="space-y-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-          <Star className="h-4 w-4" />
-          {t("myReviews")}
+        {/* 내 리뷰 */}
+        <Link
+          href="/my/reviews"
+          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
+            <Star className="h-5 w-5 text-foreground/70" />
+          </div>
+          <span className="flex-1 text-base font-medium">{t("myReviews")}</span>
           {reviews.length > 0 && (
-            <Badge variant="secondary" className="text-xs">
-              {reviews.length}
-            </Badge>
+            <Badge variant="secondary" className="mr-1">{reviews.length}</Badge>
           )}
-        </h2>
-        {reviews.length === 0 ? (
-          <Card>
-            <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
-              <p className="text-sm">작성한 리뷰가 없습니다</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {reviews.slice(0, 1).map((review) => (
-              <ReviewItem
-                key={review.id}
-                review={review}
-                onEdit={setEditingReview}
-                onDelete={handleDeleteReview}
-              />
-            ))}
-            {reviews.length > 1 && (
-              <Link href="/my/reviews" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
-                더보기
-              </Link>
-            )}
-          </div>
-        )}
-      </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+        </Link>
 
-      {/* My Posts */}
-      <div className="space-y-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-          <MessageSquare className="h-4 w-4" />
-          {t("myPosts")}
-          {posts.length > 0 && (
-            <Badge variant="secondary" className="text-xs">
-              {posts.length}
-            </Badge>
-          )}
-        </h2>
-        {posts.length === 0 ? (
-          <Card>
-            <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
-              <p className="text-sm">작성한 게시글이 없습니다</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {posts.slice(0, 1).map((post) => (
-              <PostItem
-                key={post.id}
-                post={post}
-                onDelete={handleDeletePost}
-              />
-            ))}
-            {posts.length > 1 && (
-              <Link href="/my/posts" className={cn("block mt-3", buttonVariants({ variant: "outline" }), "w-full")}>
-                더보기
-              </Link>
-            )}
+        {/* 내 게시글 */}
+        <Link
+          href="/my/posts"
+          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
+            <MessageSquare className="h-5 w-5 text-foreground/70" />
           </div>
-        )}
+          <span className="flex-1 text-base font-medium">{t("myPosts")}</span>
+          {posts.length > 0 && (
+            <Badge variant="secondary" className="mr-1">{posts.length}</Badge>
+          )}
+          <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+        </Link>
       </div>
 
       {/* Password Change, Logout & Admin */}
@@ -472,14 +383,6 @@ export function MyPageContent({
         </DialogContent>
       </Dialog>
 
-      <ReviewEditDialog
-        review={editingReview}
-        open={!!editingReview}
-        onOpenChange={(open) => {
-          if (!open) setEditingReview(null);
-        }}
-        onUpdated={handleReviewUpdated}
-      />
     </div>
   );
 }

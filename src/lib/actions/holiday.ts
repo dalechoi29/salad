@@ -1,10 +1,11 @@
 "use server";
 
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Holiday } from "@/types";
 
-export async function getHolidays(
+export const getHolidays = cache(async function getHolidays(
   year?: number,
   month?: number
 ): Promise<Holiday[]> {
@@ -26,7 +27,7 @@ export async function getHolidays(
 
   const { data } = await query;
   return (data as Holiday[]) ?? [];
-}
+});
 
 async function cleanupDeliveryDaysForHoliday(
   supabase: Awaited<ReturnType<typeof createClient>>,

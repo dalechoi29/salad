@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { revalidatePath } from "next/cache";
 import { createAdminClient, createClient, getAuthUser } from "@/lib/supabase/server";
 import type { ActionResult, StoreClosure } from "@/types";
@@ -91,7 +92,9 @@ async function cleanupSelectionsForClosure(
   return { affectedCount: affected, affectedSubIds: [...affectedSubIds] };
 }
 
-export async function getStoreClosures(year?: number): Promise<StoreClosure[]> {
+export const getStoreClosures = cache(async function getStoreClosures(
+  year?: number
+): Promise<StoreClosure[]> {
   const supabase = await createClient();
   let query = supabase.from("store_closures").select("*").order("closure_date");
 
@@ -103,7 +106,7 @@ export async function getStoreClosures(year?: number): Promise<StoreClosure[]> {
 
   const { data } = await query;
   return (data as StoreClosure[]) ?? [];
-}
+});
 
 export async function addStoreClosure(
   date: string,

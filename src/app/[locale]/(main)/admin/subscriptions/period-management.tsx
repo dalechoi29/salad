@@ -613,11 +613,16 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                     (m) => m.value === sub.payment_method
                                   )?.label ?? sub.payment_method
                                 : "미선택";
-                            const totalSalads =
-                              (sub.total_delivery_days ?? sub.frequency_per_week * 4) *
-                              sub.salads_per_delivery;
+                            const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
+                            const paidDeliveryDays = sub.total_delivery_days ?? sub.frequency_per_week * 4;
+                            const paidSalads = paidDeliveryDays * sub.salads_per_delivery;
+                            const totalSalads = (paidDeliveryDays + carryoverDays) * sub.salads_per_delivery;
                             const totalPrice =
                               period.price_per_salad > 0
+                                ? paidSalads * period.price_per_salad
+                                : null;
+                            const originalPrice =
+                              carryoverDays > 0 && period.price_per_salad > 0
                                 ? totalSalads * period.price_per_salad
                                 : null;
 
@@ -690,11 +695,16 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                     {sub.salads_per_delivery}개
                                   </span>
                                   <span>·</span>
-                                  <span>월 {totalSalads}개</span>
+                                  <span>총 {totalSalads}개</span>
                                   {totalPrice !== null && (
                                     <>
                                       <span>·</span>
-                                      <span className="font-medium text-foreground">
+                                      <span className="flex items-center gap-1.5 font-medium text-foreground">
+                                        {originalPrice !== null && (
+                                          <span className="font-normal text-muted-foreground line-through">
+                                            {originalPrice.toLocaleString()}원
+                                          </span>
+                                        )}
                                         {totalPrice.toLocaleString()}원
                                       </span>
                                     </>

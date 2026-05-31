@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type {
@@ -212,13 +213,23 @@ export async function getAdminSettings(): Promise<Record<string, string>> {
   return settings;
 }
 
-export async function getMenuSelectionCutoff(): Promise<{ day: number; time: string }> {
-  const settings = await getAdminSettings();
+export const getMenuSelectionCutoff = cache(async (): Promise<{ day: number; time: string }> => {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("admin_settings")
+    .select("key, value")
+    .in("key", ["menu_selection_cutoff_day", "menu_selection_cutoff_time"]);
+
+  const settings: Record<string, string> = {};
+  for (const row of data ?? []) {
+    settings[row.key] = row.value;
+  }
+
   return {
     day: parseInt(settings.menu_selection_cutoff_day ?? "4", 10),
     time: settings.menu_selection_cutoff_time ?? "23:59",
   };
-}
+});
 
 export async function updateAdminSetting(
   key: string,
@@ -2013,4 +2024,466 @@ export async function getUsersWithPendingCredits(): Promise<Set<string>> {
     .is("applied_to_subscription_id", null);
 
   return new Set((data ?? []).map((r: any) => r.user_id as string));
+}
+
+// ─── Admin Per-User Detail ───────────────────────────────────────────────────
+
+export interface AdminUserSubscriptionEntry {
+  subscription: {
+    id: string;
+    periodId: string;
+    targetMonth: string;
+    frequencyPerWeek: number;
+    saladsPerDelivery: number;
+    totalDeliveryDays: number | null;
+    paymentStatus: string;
+    paymentMethod: string | null;
+    carryoverDays: number;
+  };
+  deliveryDateStrings: string[];
+  /** Vacation skips — generate a next-month compensation credit. */
+  skippedDates: string[];
+  /** Same-month reschedule skips — no credit, original date moved elsewhere. */
+  rescheduledDates: string[];
+  deliveryStart: string | null;
+  deliveryEnd: string | null;
+}
+
+export interface AdminUserDetail {
+  profile: {
+    id: string;
+    email: string;
+    realName: string;
+    nickname: string;
+    role: string;
+    status: string;
+    createdAt: string;
+  };
+  subscriptionEntries: AdminUserSubscriptionEntry[];
+  compensationCredits: CompensationCredit[];
+}
+
+export async function getAdminUserDetail(
+  userId: string
+): Promise<AdminUserDetail | null> {
+  if (!(await hasPermission("users.view"))) return null;
+
+  const supabase = await createClient();
+
+  // Fetch profile
+  const { data: profileRow } = await supabase
+    .from("profiles")
+    .select("id, email, real_name, nickname, role, status, created_at")
+    .eq("id", userId)
+    .single();
+
+  if (!profileRow) return null;
+
+  // Fetch subscriptions with period info
+    const { data: subs } = await supabase
+    .from("subscriptions")
+    .select(
+      "id, period_id, frequency_per_week, salads_per_delivery, total_delivery_days, carryover_delivery_days, payment_status, payment_method, subscription_periods(target_month, delivery_start, delivery_end)"
+    )
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  const { expandDeliveryDaysToDateStrings } = await import(
+    "@/lib/delivery-days"
+  );
+
+  const subscriptionEntries: AdminUserSubscriptionEntry[] = [];
+
+  for (const sub of subs ?? []) {
+    // Fetch delivery days
+    const { data: ddRows } = await supabase
+      .from("delivery_days")
+      .select("week_start, selected_days")
+      .eq("subscription_id", sub.id);
+
+    const deliveryDateStrings = expandDeliveryDaysToDateStrings(ddRows ?? []);
+
+    // Fetch skipped dates (split by reason)
+    const { data: skipRows } = await supabase
+      .from("skipped_delivery_days")
+      .select("delivery_date, skip_reason")
+      .eq("subscription_id", sub.id);
+
+    // Vacation skips are removed from delivery_days at skip time, and restored on unskip.
+    // Reschedule actions maintain delivery_days and clean up skipped_delivery_days for
+    // replacement dates, so simple reason-based filtering is safe here.
+    const skippedDates = (skipRows ?? [])
+      .filter((r: any) => r.skip_reason !== "reschedule")
+      .map((r: any) => r.delivery_date as string);
+    const rescheduledDates = (skipRows ?? [])
+      .filter((r: any) => r.skip_reason === "reschedule")
+      .map((r: any) => r.delivery_date as string);
+
+    const period = sub.subscription_periods as any;
+
+    subscriptionEntries.push({
+      subscription: {
+        id: sub.id,
+        periodId: sub.period_id,
+        targetMonth: period?.target_month ?? sub.period_id,
+        frequencyPerWeek: sub.frequency_per_week,
+        saladsPerDelivery: sub.salads_per_delivery ?? 1,
+        totalDeliveryDays: sub.total_delivery_days ?? null,
+        paymentStatus: sub.payment_status ?? "pending",
+        paymentMethod: sub.payment_method ?? null,
+        carryoverDays: (sub.carryover_delivery_days as number | null) ?? 0,
+      },
+      deliveryDateStrings,
+      skippedDates,
+      rescheduledDates,
+      deliveryStart: period?.delivery_start ?? null,
+      deliveryEnd: period?.delivery_end ?? null,
+    });
+  }
+
+  // Fetch compensation credits for this user
+  const { data: credits } = await supabase
+    .from("compensation_credits")
+    .select("id, user_id, days, source_period, reason, admin_notes, applied_to_subscription_id, applied_at, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  const compensationCredits: CompensationCredit[] = (credits ?? []).map(
+    (row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      realName: (profileRow as any).real_name,
+      days: row.days,
+      sourcePeriod: row.source_period,
+      reason: row.reason ?? null,
+      adminNotes: row.admin_notes ?? null,
+      appliedToSubscriptionId: row.applied_to_subscription_id ?? null,
+      appliedAt: row.applied_at ?? null,
+      createdAt: row.created_at,
+    })
+  );
+
+  return {
+    profile: {
+      id: (profileRow as any).id,
+      email: (profileRow as any).email,
+      realName: (profileRow as any).real_name,
+      nickname: (profileRow as any).nickname,
+      role: (profileRow as any).role,
+      status: (profileRow as any).status,
+      createdAt: (profileRow as any).created_at,
+    },
+    subscriptionEntries,
+    compensationCredits,
+  };
+}
+
+/** Admin: skip delivery dates for any user (no 2-day cutoff). */
+export async function adminSkipDeliveryDates(
+  userId: string,
+  subscriptionId: string,
+  deliveryDates: string[],
+  skipReason?: string
+): Promise<{ error?: string; skippedCount?: number }> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const supabase = await createClient();
+
+  // Verify the subscription belongs to userId
+  const { data: sub } = await supabase
+    .from("subscriptions")
+    .select("id, user_id, subscription_periods(target_month)")
+    .eq("id", subscriptionId)
+    .eq("user_id", userId)
+    .single();
+
+  if (!sub) return { error: "구독을 찾을 수 없어요." };
+
+  const callerUser = await getAuthUser();
+  if (!callerUser) return { error: "로그인이 필요해요." };
+
+  const rows = deliveryDates.map((d) => ({
+    user_id: userId,
+    subscription_id: subscriptionId,
+    delivery_date: d,
+    skipped_by: callerUser.id,
+    skip_reason: skipReason ?? null,
+  }));
+
+  const { error: insertError } = await supabase
+    .from("skipped_delivery_days")
+    .upsert(rows, { onConflict: "subscription_id,delivery_date" });
+
+  if (insertError) return { error: insertError.message };
+
+  // Remove skipped dates from delivery_days (same as user-side skipDeliveryDates).
+  for (const dateStr of deliveryDates) {
+    const d = new Date(dateStr + "T00:00:00");
+    const dow = d.getDay();
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+    const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+
+    const { data: ddRow } = await supabase
+      .from("delivery_days")
+      .select("id, selected_days")
+      .eq("subscription_id", subscriptionId)
+      .eq("week_start", weekStart)
+      .maybeSingle();
+
+    if (ddRow) {
+      const updated = ((ddRow.selected_days as number[]) ?? []).filter((day) => day !== dow);
+      if (updated.length === 0) {
+        await supabase.from("delivery_days").delete().eq("id", ddRow.id);
+      } else {
+        await supabase.from("delivery_days").update({ selected_days: updated }).eq("id", ddRow.id);
+      }
+    }
+  }
+
+  // Sync credit — count vacation skips (null reason or any non-reschedule reason).
+  // .neq("skip_reason","reschedule") alone would exclude null rows in SQL.
+  const { count } = await supabase
+    .from("skipped_delivery_days")
+    .select("id", { count: "exact", head: true })
+    .eq("subscription_id", subscriptionId)
+    .or("skip_reason.is.null,skip_reason.neq.reschedule");
+
+  const totalSkipped = count ?? 0;
+  const period = sub.subscription_periods as { target_month: string } | null;
+
+  const { data: existing } = await supabase
+    .from("compensation_credits")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_subscription_id" as any, subscriptionId)
+    .is("applied_at", null)
+    .maybeSingle();
+
+  const targetMonth = period?.target_month ?? null;
+  const monthMatch = targetMonth?.match(/(\d+)월/);
+  const reasonStr = monthMatch ? `${monthMatch[1]}월 구독 연기` : "구독 연기";
+
+  if (existing) {
+    await supabase
+      .from("compensation_credits")
+      .update({ days: totalSkipped, reason: reasonStr })
+      .eq("id", existing.id);
+  } else {
+    await supabase.from("compensation_credits").insert({
+      user_id: userId,
+      days: totalSkipped,
+      source_period: targetMonth,
+      source_subscription_id: subscriptionId,
+      reason: reasonStr,
+    });
+  }
+
+  revalidatePath(`/admin/users/${userId}`);
+  revalidatePath("/admin/users");
+
+  return { skippedCount: deliveryDates.length };
+}
+
+/** Admin: unskip delivery dates for any user. */
+export async function adminUnskipDeliveryDates(
+  userId: string,
+  subscriptionId: string,
+  deliveryDates: string[]
+): Promise<{ error?: string }> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const supabase = await createClient();
+
+  const { error: delError } = await supabase
+    .from("skipped_delivery_days")
+    .delete()
+    .eq("subscription_id", subscriptionId)
+    .in("delivery_date", deliveryDates);
+
+  if (delError) return { error: delError.message };
+
+  // Restore dates back into delivery_days
+  for (const dateStr of deliveryDates) {
+    const d = new Date(dateStr + "T00:00:00");
+    const dow = d.getDay();
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+    const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+
+    const { data: ddRow } = await supabase
+      .from("delivery_days")
+      .select("id, selected_days")
+      .eq("subscription_id", subscriptionId)
+      .eq("week_start", weekStart)
+      .maybeSingle();
+
+    if (ddRow) {
+      const days = (ddRow.selected_days as number[]) ?? [];
+      if (!days.includes(dow)) {
+        await supabase
+          .from("delivery_days")
+          .update({ selected_days: [...days, dow].sort((a, b) => a - b) })
+          .eq("id", ddRow.id);
+      }
+    } else {
+      await supabase.from("delivery_days").insert({
+        user_id: userId,
+        subscription_id: subscriptionId,
+        week_start: weekStart,
+        selected_days: [dow],
+      });
+    }
+  }
+
+  // Re-sync credit — same null-safe OR filter
+  const { count } = await supabase
+    .from("skipped_delivery_days")
+    .select("id", { count: "exact", head: true })
+    .eq("subscription_id", subscriptionId)
+    .or("skip_reason.is.null,skip_reason.neq.reschedule");
+
+  const totalSkipped = count ?? 0;
+
+  const { data: existing } = await supabase
+    .from("compensation_credits")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_subscription_id" as any, subscriptionId)
+    .is("applied_at", null)
+    .maybeSingle();
+
+  if (existing) {
+    if (totalSkipped === 0) {
+      await supabase.from("compensation_credits").delete().eq("id", existing.id);
+    } else {
+      await supabase
+        .from("compensation_credits")
+        .update({ days: totalSkipped })
+        .eq("id", existing.id);
+    }
+  }
+
+  revalidatePath(`/admin/users/${userId}`);
+  revalidatePath("/admin/users");
+
+  return {};
+}
+
+/** Admin: reschedule delivery dates within the same month for any user. */
+export async function adminRescheduleDeliveryDates(
+  userId: string,
+  subscriptionId: string,
+  datesToSkip: string[],
+  replacementDates: string[]
+): Promise<{ error?: string }> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const supabase = await createClient();
+
+  const { data: sub } = await supabase
+    .from("subscriptions")
+    .select("id, user_id")
+    .eq("id", subscriptionId)
+    .eq("user_id", userId)
+    .single();
+  if (!sub) return { error: "구독을 찾을 수 없어요." };
+
+  const callerUser = await getAuthUser();
+  if (!callerUser) return { error: "로그인이 필요해요." };
+
+  // Remove each skipped date's DOW from delivery_days
+  for (const dateStr of datesToSkip) {
+    const d = new Date(dateStr + "T00:00:00");
+    const dow = d.getDay();
+    const monday = new Date(d);
+    const diff = dow === 0 ? 6 : dow - 1;
+    monday.setDate(monday.getDate() - diff);
+    const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+
+    const { data: existing } = await supabase
+      .from("delivery_days")
+      .select("id, selected_days")
+      .eq("subscription_id", subscriptionId)
+      .eq("week_start", weekStart)
+      .maybeSingle();
+
+    if (existing) {
+      const days = (existing.selected_days as number[]) ?? [];
+      const updated = days.filter((x) => x !== dow);
+      if (updated.length === 0) {
+        await supabase.from("delivery_days").delete().eq("id", existing.id);
+      } else {
+        await supabase.from("delivery_days").update({ selected_days: updated }).eq("id", existing.id);
+      }
+    }
+  }
+
+  // Insert skip records
+  if (datesToSkip.length > 0) {
+    const skipRows = datesToSkip.map((date) => ({
+      user_id: userId,
+      subscription_id: subscriptionId,
+      delivery_date: date,
+      skipped_by: callerUser.id,
+      skip_reason: "reschedule",
+    }));
+    const { error: skipError } = await supabase
+      .from("skipped_delivery_days")
+      .upsert(skipRows, { onConflict: "subscription_id,delivery_date" });
+    if (skipError) return { error: skipError.message };
+  }
+
+  // Add replacement dates to delivery_days
+  for (const dateStr of replacementDates) {
+    const d = new Date(dateStr + "T00:00:00");
+    const dow = d.getDay();
+    const monday = new Date(d);
+    const diff = dow === 0 ? 6 : dow - 1;
+    monday.setDate(monday.getDate() - diff);
+    const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+
+    const { data: existing } = await supabase
+      .from("delivery_days")
+      .select("id, selected_days")
+      .eq("subscription_id", subscriptionId)
+      .eq("week_start", weekStart)
+      .maybeSingle();
+
+    if (existing) {
+      const days = (existing.selected_days as number[]) ?? [];
+      if (!days.includes(dow)) {
+        await supabase
+          .from("delivery_days")
+          .update({ selected_days: [...days, dow].sort((a, b) => a - b) })
+          .eq("id", existing.id);
+      }
+    } else {
+      await supabase.from("delivery_days").insert({
+        user_id: userId,
+        subscription_id: subscriptionId,
+        week_start: weekStart,
+        selected_days: [dow],
+      });
+    }
+  }
+
+  // Remove replacement dates from skipped list (un-skip them)
+  if (replacementDates.length > 0) {
+    await supabase
+      .from("skipped_delivery_days")
+      .delete()
+      .eq("subscription_id", subscriptionId)
+      .in("delivery_date", replacementDates);
+  }
+
+  revalidatePath(`/admin/users/${userId}`);
+  revalidatePath("/admin/users");
+  return {};
 }

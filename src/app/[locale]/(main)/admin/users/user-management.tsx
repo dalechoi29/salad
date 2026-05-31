@@ -360,6 +360,12 @@ export function UserManagement({
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Link
+                    href={`/admin/users/${user.id}`}
+                    className="inline-flex h-8 items-center rounded-md border border-input bg-background px-2.5 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    상세 보기
+                  </Link>
                   <span
                     className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColors.approved}`}
                   >

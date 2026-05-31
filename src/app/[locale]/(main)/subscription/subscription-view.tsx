@@ -355,7 +355,7 @@ function DeliveryCalendar({
   }, [previousDates, deliveryStart, deliveryEnd, selectedDateStrings]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {hasPreviousHints && (
         <p className="text-xs text-muted-foreground">
           지난 구독에서 선택하셨던 날짜에 점(·)으로 표시했어요.
@@ -906,6 +906,7 @@ function SubscriptionForm({
         <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
       </div>
 
+      <div className="space-y-3">
       <PeriodInfoCard period={period} phase={phase} />
 
       <Card>
@@ -1048,7 +1049,7 @@ function SubscriptionForm({
               <span className="font-medium">{deliveryDayCount}회</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">월 총 샐러드</span>
+              <span className="text-muted-foreground">총 샐러드</span>
               <span className="font-medium">{totalSalads}개</span>
             </div>
             {totalCarryoverDays > 0 && (
@@ -1088,6 +1089,7 @@ function SubscriptionForm({
           </Button>
         </CardFooter>
       </Card>
+      </div>
     </div>
   );
 }
@@ -1220,23 +1222,29 @@ function SubscriptionStatus({
     carryoverDaysAvailable,
     Math.max(0, savedDates.length - appliedDeliveryDays)
   );
+  // If carryover_delivery_days is recorded in the DB, trust it as the authoritative
+  // free-day count — it's always written correctly at subscription save time.
   const currentTotalCarryoverDays =
-    currentCarryoverDaysUsed + carryoverDaysAlreadySelected;
-  // Compensation reduces the price of existing selections (Model A).
-  // For subs saved before carryover_delivery_days was set (carryoverDaysAlreadySelected > 0),
-  // appliedDeliveryDays holds the raw selected count so we subtract carryover manually.
-  // For properly-saved subs (carryoverDaysAlreadySelected === 0), appliedDeliveryDays is
-  // already the paid count and this subtraction is a no-op.
+    subscription.carryover_delivery_days && subscription.carryover_delivery_days > 0
+      ? subscription.carryover_delivery_days
+      : currentCarryoverDaysUsed + carryoverDaysAlreadySelected;
+  // Paid days = total_delivery_days from DB (paid-only count, set at save time).
+  // Vacation skips do NOT change this — she still paid for the same number of days.
   const effectivePaidDays = Math.max(
     0,
     appliedDeliveryDays - carryoverDaysAlreadySelected
   );
+  // Original total planned days = paid + free carryover (before any vacation skips).
+  const originalTotalDays = effectivePaidDays + currentTotalCarryoverDays;
+  // Currently active delivery days — may be fewer than originalTotalDays if the
+  // user applied vacation skips (those dates are removed from delivery_days).
   const currentDeliveryDays =
-    savedDates.length > 0
-      ? savedDates.length
-      : effectivePaidDays + currentTotalCarryoverDays;
+    savedDates.length > 0 ? savedDates.length : originalTotalDays;
+  // Paid salads: what she was actually charged for — vacation skips don't change price.
   const totalSalads = effectivePaidDays * currentSalads;
-  const displayedTotalSalads = currentDeliveryDays * currentSalads;
+  // Displayed total uses the *original* planned count so vacation skips don't deflate
+  // the reference used for the strikethrough (e.g. 18개 → ~~18개~~ 14개).
+  const displayedTotalSalads = originalTotalDays * currentSalads;
 
   const matchedPresetLabel = detectMatchingPreset(
     savedDates,
@@ -1691,6 +1699,7 @@ function SubscriptionStatus({
         )}
       </div>
 
+      <div className="space-y-3">
       <PeriodInfoCard
         period={period}
         phase={phase}
@@ -2059,7 +2068,7 @@ function SubscriptionStatus({
                   <span className="font-medium">{editDeliveryDays}회</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">월 총 샐러드</span>
+                  <span className="text-muted-foreground">총 샐러드</span>
                   <span className="font-medium">{editTotalSalads}개</span>
                 </div>
                 {totalEditCarryoverDays > 0 && (
@@ -2136,7 +2145,7 @@ function SubscriptionStatus({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">선택한 날짜</span>
                 <span>
-                  {currentDeliveryDays}/{effectivePaidDays + currentTotalCarryoverDays}일
+                  {currentDeliveryDays}/{originalTotalDays}일
                 </span>
               </div>
               {currentTotalCarryoverDays > 0 && (
@@ -2149,7 +2158,7 @@ function SubscriptionStatus({
                 </div>
               )}
               <div className="flex justify-between font-medium">
-                <span>월 총 샐러드</span>
+                <span>총 샐러드</span>
                 <span>{displayedTotalSalads}개</span>
               </div>
               <div className="flex justify-between text-lg font-semibold">
@@ -2358,6 +2367,7 @@ function SubscriptionStatus({
           </Button>
         </Link>
       )}
+      </div>
 
       <Dialog open={holdConfirmOpen} onOpenChange={setHoldConfirmOpen}>
         <DialogContent className="max-w-md">
@@ -2459,8 +2469,8 @@ function PeriodInfoCard({
   const t = useTranslations("subscription");
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="gap-2">
+      <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-base">
             <CalendarRange className="h-4 w-4" />
