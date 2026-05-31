@@ -119,6 +119,9 @@ export function MyPageContent({
     router.replace("/");
   }
 
+  const listLinkClass =
+    "flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50 active:bg-accent/70 touch-manipulation";
+
   return (
     <div className="mx-auto max-w-lg space-y-3">
       <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
@@ -138,7 +141,7 @@ export function MyPageContent({
                     setNewNickname(displayNickname);
                     setNicknameDialog(true);
                   }}
-                  className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:bg-accent active:text-foreground touch-manipulation"
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
@@ -166,7 +169,7 @@ export function MyPageContent({
         />
       ) : (
         <Link href="/subscription" className="block">
-          <Card className="transition-colors hover:bg-accent/50">
+          <Card className="transition-colors hover:bg-accent/50 active:bg-accent/70 touch-manipulation">
             <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
                 <UtensilsCrossed className="h-5 w-5 text-green-500" />
@@ -188,7 +191,7 @@ export function MyPageContent({
           </p>
           <Link
             href="/my/subscriptions"
-            className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+            className={listLinkClass}
           >
             <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
               <CalendarDays className="h-5 w-5 text-foreground/70" />
@@ -208,7 +211,7 @@ export function MyPageContent({
         {/* 즐겨찾기 메뉴 */}
         <Link
           href="/my/favorites"
-          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+          className={listLinkClass}
         >
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
             <Heart className="h-5 w-5 text-foreground/70" />
@@ -223,7 +226,7 @@ export function MyPageContent({
         {/* 내 리뷰 */}
         <Link
           href="/my/reviews"
-          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+          className={listLinkClass}
         >
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
             <Star className="h-5 w-5 text-foreground/70" />
@@ -238,7 +241,7 @@ export function MyPageContent({
         {/* 내 게시글 */}
         <Link
           href="/my/posts"
-          className="flex items-center gap-3 px-4 py-4 transition-colors hover:bg-accent/50"
+          className={listLinkClass}
         >
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted/60">
             <MessageSquare className="h-5 w-5 text-foreground/70" />

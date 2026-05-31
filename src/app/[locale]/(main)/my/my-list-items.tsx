@@ -742,7 +742,7 @@ export function SubscriptionCard({
   if (!hasDeliveryDates) {
     return (
       <Link href={`/subscription?period=${period.id}`} className="block">
-        <Card className={`transition-colors hover:bg-accent/50 ${isActionable && !isPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
+        <Card className={`transition-colors hover:bg-accent/50 active:bg-accent/70 touch-manipulation ${isActionable && !isPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
           <CardHeader className="space-y-0 pb-3">{cardHeader}</CardHeader>
         </Card>
       </Link>
@@ -752,7 +752,7 @@ export function SubscriptionCard({
   return (
     <Card className={`${isActionable && !isPaid ? "border-primary/50 ring-1 ring-primary/20" : ""}`}>
       {/* Clickable header links to subscription page */}
-      <CardHeader className="space-y-0 pb-2 transition-colors hover:bg-accent/50 rounded-t-xl">
+      <CardHeader className="space-y-0 pb-2 transition-colors hover:bg-accent/50 active:bg-accent/70 rounded-t-xl touch-manipulation">
         <Link href={`/subscription?period=${period.id}`} className="block">
           {cardHeader}
         </Link>
@@ -764,7 +764,7 @@ export function SubscriptionCard({
         {/* Collapsible calendar section */}
         <button
           onClick={() => setCalendarOpen((v) => !v)}
-          className="-mx-1 flex w-[calc(100%+0.5rem)] items-center justify-between rounded-lg px-1 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="-mx-1 flex w-[calc(100%+0.5rem)] items-center justify-between rounded-lg px-1 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground active:bg-accent/70 active:text-foreground touch-manipulation"
         >
           <span>배송 일정</span>
           {calendarOpen ? (

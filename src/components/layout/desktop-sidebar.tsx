@@ -87,6 +87,10 @@ export function DesktopSidebar() {
       ]
     : swappedBase;
 
+  const resolvedNavItems = navItems.map((item) =>
+    !user && item.href === "/pickup" ? { ...item, href: "/login" } : item
+  );
+
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 border-r bg-background md:block">
       <div className="flex h-full flex-col">
@@ -96,7 +100,7 @@ export function DesktopSidebar() {
         </Link>
 
         <nav className="flex-1 space-y-1 px-3 py-4">
-          {navItems.map((item) => {
+          {resolvedNavItems.map((item) => {
             const isActive =
               item.href === "/"
                 ? pathname === "/"

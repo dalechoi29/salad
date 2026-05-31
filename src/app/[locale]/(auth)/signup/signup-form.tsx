@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { Link } from "@/i18n/navigation";
 import { Loader2, CheckCircle2, Sprout } from "lucide-react";
 
-export function SignupForm() {
+export function SignupForm({ titleId }: { titleId?: string }) {
   const t = useTranslations("auth");
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
@@ -134,7 +134,7 @@ export function SignupForm() {
       <div className="flex flex-col items-center gap-1">
         <div className="flex items-center gap-2">
           <Sprout className="h-6 w-6 text-primary" />
-          <span className="text-lg font-semibold">{t("signupTitle")}</span>
+          <span id={titleId} className="text-lg font-semibold">{t("signupTitle")}</span>
         </div>
       </div>
 

@@ -258,7 +258,14 @@ export function HomeDeliveryStrip({
   const fadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeDateRef = useRef<string | null>(defaultDate);
   const stripInViewRef = useRef(true);
-  const shouldScrollChipRef = useRef(false);
+
+  function getChipScrollTop(chipList: HTMLDivElement, chip: HTMLElement): number {
+    return (
+      chip.getBoundingClientRect().top -
+      chipList.getBoundingClientRect().top +
+      chipList.scrollTop
+    );
+  }
 
   function scrollChipIntoView(
     chipList: HTMLDivElement,
@@ -267,7 +274,7 @@ export function HomeDeliveryStrip({
   ) {
     const chip = chipList.querySelector<HTMLElement>(`[data-date="${dateStr}"]`);
     if (!chip) return;
-    const chipTop = chip.offsetTop;
+    const chipTop = getChipScrollTop(chipList, chip);
     const chipBottom = chipTop + chip.offsetHeight;
     const viewTop = chipList.scrollTop;
     const viewBottom = viewTop + chipList.clientHeight;
@@ -301,10 +308,7 @@ export function HomeDeliveryStrip({
   }, [activeDate]);
 
   const selectDate = useCallback((dateStr: string, manual = false) => {
-    if (manual) {
-      autoAdvancePausedRef.current = true;
-      shouldScrollChipRef.current = true;
-    }
+    if (manual) autoAdvancePausedRef.current = true;
     setActiveDate(dateStr);
   }, []);
 
@@ -366,12 +370,11 @@ export function HomeDeliveryStrip({
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = chipListRef.current;
-    if (!el || !activeDate || !shouldScrollChipRef.current) return;
-    shouldScrollChipRef.current = false;
+    if (!el || !activeDate) return;
     scrollChipIntoView(el, activeDate, true);
-  }, [activeDate]);
+  }, [activeDate, deliveryDates]);
 
   // Scroll / swipe on the content panel — one date per scroll, fixed brief lock after each step.
   useEffect(() => {
@@ -587,6 +590,11 @@ export function HomeDeliveryStrip({
 
             if (isToday && !isActive) chipCls += " ring-1 ring-foreground/30";
 
+            const showStatusIndicator =
+              hasMenu ||
+              (closedNoMenu && !guestMode) ||
+              (selectionOpen && !isPast);
+
             return (
               <button
                 key={dateStr}
@@ -598,21 +606,27 @@ export function HomeDeliveryStrip({
                   }
                   selectDate(dateStr, true);
                 }}
-                className={`flex shrink-0 flex-col items-center rounded-lg px-1.5 py-2.5 text-center transition-all duration-200 ${chipCls}`}
+                className={cn(
+                  "flex shrink-0 flex-col items-center justify-center rounded-lg px-1.5 text-center transition-all duration-200",
+                  showStatusIndicator ? "py-2.5" : "min-h-[52px] py-2",
+                  chipCls
+                )}
               >
                 <span className="text-sm font-semibold leading-tight">
                   {month}/{day}
                 </span>
                 <span className="text-xs leading-tight opacity-80">{dow}</span>
-                <div className="mt-1 flex h-3.5 items-center justify-center">
-                  {hasMenu ? (
-                    <Check className="h-3 w-3" />
-                  ) : closedNoMenu ? (
-                    <span className="text-[10px] font-medium leading-none">마감</span>
-                  ) : selectionOpen && !isPast ? (
-                    <span className="block h-1 w-1 rounded-full bg-current opacity-60" />
-                  ) : null}
-                </div>
+                {showStatusIndicator ? (
+                  <div className="mt-1 flex h-3.5 items-center justify-center">
+                    {hasMenu ? (
+                      <Check className="h-3 w-3" />
+                    ) : closedNoMenu && !guestMode ? (
+                      <span className="text-[10px] font-medium leading-none">마감</span>
+                    ) : selectionOpen && !isPast ? (
+                      <span className="block h-1 w-1 rounded-full bg-current opacity-60" />
+                    ) : null}
+                  </div>
+                ) : null}
               </button>
             );
           })}

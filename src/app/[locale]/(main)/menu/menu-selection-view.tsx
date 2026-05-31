@@ -676,13 +676,13 @@ export function MenuSelectionView({
 
       {/* Page title (browse-only mode) */}
       {isBrowseOnly && (
-        <h1 className="mb-4 mt-2 text-2xl font-bold tracking-tight">이달의 메뉴</h1>
+        <h1 className="mb-1 mt-2 text-2xl font-bold tracking-tight">이달의 메뉴</h1>
       )}
 
       {/* ── Step 2: Date chip strip ─────────────────────────────────── */}
       <div
         ref={chipStripRef}
-        className="-mx-4 cursor-grab overflow-x-auto pt-4 active:cursor-grabbing [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={`-mx-4 cursor-grab overflow-x-auto active:cursor-grabbing [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isBrowseOnly ? "pt-1" : "pt-4"}`}
         onPointerDown={(e) => {
           const el = chipStripRef.current;
           if (!el) return;

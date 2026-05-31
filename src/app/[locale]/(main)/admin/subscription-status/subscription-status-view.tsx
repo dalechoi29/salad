@@ -413,19 +413,32 @@ function MonthCalendar({
 
     let wheelAccum = 0;
     let lockedUntil = 0;
+    let touchStartX = 0;
     let touchStartY = 0;
     let touchTracking = false;
+    let touchWasSwipe = false;
+    let pointerStartX = 0;
     let pointerStartY = 0;
     let pointerDragging = false;
     let pointerWasDrag = false;
     let pointerId = 0;
 
-    const stepFromDelta = (delta: number) => {
+    const stepFromDelta2D = (dx: number, dy: number) => {
       const now = Date.now();
       if (now < lockedUntil) return;
-      if (Math.abs(delta) < SCROLL_STEP_THRESHOLD) return;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      if (Math.max(absX, absY) < SCROLL_STEP_THRESHOLD) return;
+      const delta = absX >= absY ? dx : dy;
       navigateWeek(delta > 0 ? 1 : -1);
       lockedUntil = now + SCROLL_STEP_LOCK_MS;
+    };
+
+    const suppressDayClickBriefly = () => {
+      suppressDayClickRef.current = true;
+      window.setTimeout(() => {
+        suppressDayClickRef.current = false;
+      }, 300);
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -435,7 +448,6 @@ function MonthCalendar({
         wheelAccum = 0;
         return;
       }
-      // Trackpad swipes may report on deltaX or deltaY depending on gesture.
       const delta =
         Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
       wheelAccum += delta;
@@ -447,25 +459,34 @@ function MonthCalendar({
     };
 
     const onTouchStart = (e: TouchEvent) => {
+      touchStartX = e.touches[0]?.clientX ?? 0;
       touchStartY = e.touches[0]?.clientY ?? 0;
       touchTracking = true;
+      touchWasSwipe = false;
     };
 
     const onTouchMove = (e: TouchEvent) => {
       if (!touchTracking) return;
+      const x = e.touches[0]?.clientX ?? touchStartX;
       const y = e.touches[0]?.clientY ?? touchStartY;
-      if (Math.abs(y - touchStartY) > 8) e.preventDefault();
+      if (Math.max(Math.abs(x - touchStartX), Math.abs(y - touchStartY)) > 8) {
+        touchWasSwipe = true;
+        e.preventDefault();
+      }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
       touchTracking = false;
+      const endX = e.changedTouches[0]?.clientX;
       const endY = e.changedTouches[0]?.clientY;
-      if (endY == null) return;
-      stepFromDelta(touchStartY - endY);
+      if (endX == null || endY == null) return;
+      if (touchWasSwipe) suppressDayClickBriefly();
+      stepFromDelta2D(touchStartX - endX, touchStartY - endY);
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || e.pointerType === "touch") return;
+      pointerStartX = e.clientX;
       pointerStartY = e.clientY;
       pointerDragging = true;
       pointerWasDrag = false;
@@ -474,8 +495,9 @@ function MonthCalendar({
 
     const onPointerMove = (e: PointerEvent) => {
       if (!pointerDragging || e.pointerId !== pointerId) return;
+      const dx = e.clientX - pointerStartX;
       const dy = e.clientY - pointerStartY;
-      if (Math.abs(dy) > 5) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > 5) {
         if (!pointerWasDrag) {
           el.setPointerCapture(pointerId);
           pointerWasDrag = true;
@@ -488,16 +510,16 @@ function MonthCalendar({
       if (!pointerDragging || e.pointerId !== pointerId) return;
       pointerDragging = false;
       if (pointerWasDrag) {
-        suppressDayClickRef.current = true;
-        window.setTimeout(() => {
-          suppressDayClickRef.current = false;
-        }, 0);
+        suppressDayClickBriefly();
         try {
           el.releasePointerCapture(pointerId);
         } catch {
           /* already released */
         }
-        stepFromDelta(pointerStartY - e.clientY);
+        stepFromDelta2D(
+          pointerStartX - e.clientX,
+          pointerStartY - e.clientY
+        );
       }
       pointerWasDrag = false;
     };
@@ -514,9 +536,18 @@ function MonthCalendar({
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, {
+      passive: true,
+      capture: true,
+    });
+    el.addEventListener("touchmove", onTouchMove, {
+      passive: false,
+      capture: true,
+    });
+    el.addEventListener("touchend", onTouchEnd, {
+      passive: true,
+      capture: true,
+    });
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
@@ -524,9 +555,9 @@ function MonthCalendar({
 
     return () => {
       el.removeEventListener("wheel", onWheel);
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchstart", onTouchStart, true);
+      el.removeEventListener("touchmove", onTouchMove, true);
+      el.removeEventListener("touchend", onTouchEnd, true);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", onPointerUp);
@@ -651,8 +682,8 @@ function MonthCalendar({
 
   return (
     <>
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="gap-2">
+        <CardHeader className="pb-0">
           <div className="flex items-center justify-between">
             <Button
               variant="ghost"
@@ -683,7 +714,7 @@ function MonthCalendar({
         >
           <div
             className={cn(
-              "grid grid-cols-5 gap-2 transition-opacity duration-200 ease-in-out",
+              "grid grid-cols-5 gap-2 touch-none select-none transition-opacity duration-200 ease-in-out",
               weekGridVisible ? "opacity-100" : "opacity-0"
             )}
           >
