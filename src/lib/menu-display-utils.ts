@@ -1,6 +1,7 @@
 import type { DailyMenu, MenuSelection } from "@/types";
 
 export type MenuDetail = {
+  menuId?: string;
   title: string;
   imageUrl?: string | null;
   sauce?: string | null;
@@ -17,6 +18,7 @@ export function buildAvailableMenusByDate(
     const date = dm.delivery_date;
     if (!availableMenusByDate[date]) availableMenusByDate[date] = [];
     availableMenusByDate[date].push({
+      menuId: dm.menu.id,
       title: dm.menu.title,
       imageUrl: (dm.menu as { image_url?: string | null }).image_url ?? null,
       sauce: (dm.menu as { sauce?: string | null }).sauce ?? null,
@@ -41,6 +43,7 @@ export function buildMenuDetailByDate(
     if (!menu) continue;
     if (!result[s.delivery_date]) result[s.delivery_date] = [];
     result[s.delivery_date].push({
+      menuId: menu.id,
       title: menu.title,
       imageUrl: (menu as { image_url?: string | null }).image_url ?? null,
       sauce: (menu as { sauce?: string | null }).sauce ?? null,

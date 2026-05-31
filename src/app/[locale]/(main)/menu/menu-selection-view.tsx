@@ -808,7 +808,7 @@ export function MenuSelectionView({
               <Card
                 key={dateStr}
                 id={`day-${dateStr}`}
-                className={`pt-3 pb-2 ${dayComplete ? "border-green-500/30" : ""}`}
+                className={`pt-3 pb-2 ${isBrowseOnly ? "scroll-mt-20" : "scroll-mt-36"} ${dayComplete ? "border-green-500/30" : ""}`}
               >
                 <CardHeader>
                   <div className="flex items-center justify-between">

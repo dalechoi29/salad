@@ -11,6 +11,7 @@ import type { HomeStripData } from "@/lib/home-page-types";
 import { useHomeStripHydration } from "./home-strip-hydration";
 
 interface MenuDetail {
+  menuId?: string;
   title: string;
   imageUrl?: string | null;
   sauce?: string | null;
@@ -56,7 +57,7 @@ function isWrapStep(
 }
 
 function MenuCompactRow({ menu }: { menu: MenuDetail }) {
-  return (
+  const row = (
     <div className="flex min-w-0 items-center gap-3">
       {menu.imageUrl ? (
         <img
@@ -87,6 +88,17 @@ function MenuCompactRow({ menu }: { menu: MenuDetail }) {
         )}
       </div>
     </div>
+  );
+
+  if (!menu.menuId) return row;
+
+  return (
+    <Link
+      href={`/menu/${menu.menuId}`}
+      className="-mx-1 block rounded-lg px-1 py-0.5 transition-colors hover:bg-accent/60 active:bg-accent"
+    >
+      {row}
+    </Link>
   );
 }
 
@@ -335,6 +347,7 @@ export function HomeDeliveryStrip({
     let wheelAccum = 0;
     let lockedUntil = 0;
     let touchStartY = 0;
+    let touchTracking = false;
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -360,9 +373,19 @@ export function HomeDeliveryStrip({
 
     const onTouchStart = (e: TouchEvent) => {
       touchStartY = e.touches[0]?.clientY ?? 0;
+      touchTracking = true;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touchTracking) return;
+      const y = e.touches[0]?.clientY ?? touchStartY;
+      if (Math.abs(y - touchStartY) > 8) {
+        e.preventDefault();
+      }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
+      touchTracking = false;
       const now = Date.now();
       if (now < lockedUntil) return;
 
@@ -382,11 +405,13 @@ export function HomeDeliveryStrip({
 
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
 
     return () => {
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
     };
   }, [deliveryDates, stepActiveDate]);
@@ -451,7 +476,7 @@ export function HomeDeliveryStrip({
   return (
     <div
       style={cardHeight}
-      className="flex items-stretch gap-1 overflow-hidden rounded-xl ring-1 ring-foreground/10"
+      className="flex items-stretch gap-1 overflow-hidden overscroll-contain rounded-xl ring-1 ring-foreground/10"
     >
       {/* Left: scrollable chip column — padding on outer shell so scroll never clips it */}
       <div
@@ -460,7 +485,7 @@ export function HomeDeliveryStrip({
       >
         <div
           ref={chipListRef}
-          className="flex min-h-0 flex-1 cursor-grab touch-pan-y flex-col gap-1.5 overflow-y-auto overscroll-contain active:cursor-grabbing [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex min-h-0 flex-1 cursor-grab touch-pan-y flex-col gap-1.5 overflow-y-auto overscroll-y-contain active:cursor-grabbing [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           onPointerDown={(e) => {
             const el = chipListRef.current;
             if (!el) return;
@@ -562,7 +587,7 @@ export function HomeDeliveryStrip({
       {/* Right: detail panel — scroll / swipe here to change dates */}
       <div
         ref={contentPanelRef}
-        className="relative flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col overscroll-contain"
+        className="relative flex min-h-0 min-w-0 flex-1 touch-none flex-col overscroll-contain"
       >
         {referenceClosedDate && (
           <div

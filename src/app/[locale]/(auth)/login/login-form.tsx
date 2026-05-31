@@ -122,7 +122,7 @@ export function LoginForm({ titleId }: { titleId?: string }) {
             <Label htmlFor="email-local">{t("email")}</Label>
             <div
               className={cn(
-                "flex h-12 items-center overflow-hidden rounded-lg border border-input/80 bg-background/50 transition-all duration-200",
+                "flex h-12 min-w-0 items-center overflow-hidden rounded-lg border border-input/80 bg-background/50 transition-all duration-200",
                 "hover:border-green-400/60 focus-within:border-green-500 focus-within:ring-[3px] focus-within:ring-green-500/25"
               )}
             >
@@ -139,15 +139,12 @@ export function LoginForm({ titleId }: { titleId?: string }) {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                className="h-full flex-1 border-0 bg-transparent shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                className="h-full min-w-0 flex-1 border-0 bg-transparent pl-3 shadow-none focus-visible:border-transparent focus-visible:ring-0"
               />
-              <span className="hidden shrink-0 pr-3 text-sm text-muted-foreground sm:inline">
+              <span className="shrink-0 truncate pr-3 text-xs text-muted-foreground sm:text-sm">
                 @{DEFAULT_DOMAIN}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground sm:hidden">
-              @{DEFAULT_DOMAIN}
-            </p>
           </div>
 
           <div className="space-y-2">

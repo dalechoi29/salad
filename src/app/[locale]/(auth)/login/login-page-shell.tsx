@@ -24,7 +24,7 @@ export function LoginPageShell() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
       {/* Blurred background */}
       <div
         aria-hidden
@@ -60,11 +60,8 @@ export function LoginPageShell() {
         aria-labelledby="login-dialog-title"
         className={cn(
           "relative z-10 w-full max-w-md transform transition-all duration-300 ease-out",
-          "rounded-t-2xl border border-border/60 bg-card shadow-2xl shadow-black/20",
-          "md:rounded-2xl",
-          mounted
-            ? "translate-y-0 scale-100 opacity-100"
-            : "translate-y-6 scale-[0.97] opacity-0 md:translate-y-2"
+          "max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-border/60 bg-card shadow-2xl shadow-black/20",
+          mounted ? "scale-100 opacity-100" : "scale-[0.97] opacity-0"
         )}
       >
         <button
