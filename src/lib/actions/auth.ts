@@ -22,7 +22,7 @@ export type AuthResult = {
 export async function signup(formData: FormData): Promise<AuthResult> {
   const supabase = await createClient();
 
-  const email = formData.get("email") as string;
+  const email = (formData.get("email") as string)?.trim().toLowerCase();
   const realName = formData.get("realName") as string;
   const nickname = formData.get("nickname") as string;
 
@@ -98,7 +98,7 @@ export async function signup(formData: FormData): Promise<AuthResult> {
 export async function login(formData: FormData): Promise<AuthResult> {
   const supabase = await createClient();
 
-  const email = formData.get("email") as string;
+  const email = (formData.get("email") as string)?.trim().toLowerCase();
   const password = formData.get("password") as string;
 
   if (!email || !password) {
@@ -118,10 +118,21 @@ export async function login(formData: FormData): Promise<AuthResult> {
     return { error: "INVALID_CREDENTIALS" };
   }
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    await supabase.auth.signOut();
+    return { error: "INVALID_CREDENTIALS" };
+  }
+
+  // Look up by auth user id — not email. Login lowercases the address but legacy
+  // profiles may store mixed-case emails (e.g. heesung.Jung.ext@...).
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, status, role")
-    .eq("email", email)
+    .eq("id", user.id)
     .single();
 
   if (!profile) {
