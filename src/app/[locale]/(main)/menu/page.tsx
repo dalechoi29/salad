@@ -1,5 +1,9 @@
 import { Suspense } from "react";
-import { getMenuPageShellData, getMenuPageWeekData } from "@/lib/actions/menu-page";
+import {
+  getMenuPageShellData,
+  getMenuPageWeekData,
+  getMenuPagePeriodSelections,
+} from "@/lib/actions/menu-page";
 import { shellToViewProps } from "@/lib/menu-page-types";
 import { MenuPageLoading } from "./menu-page-loading";
 import { MenuSelectionView } from "./menu-selection-view";
@@ -25,17 +29,17 @@ export default async function MenuPage({
 
 async function MenuPageContent({ focusDate }: { focusDate?: string }) {
   const shell = await getMenuPageShellData(focusDate);
-  const weekData = await getMenuPageWeekData(
-    shell.initialWeekStart,
-    shell.initialWeekEnd
-  );
+  const [weekData, periodSelections] = await Promise.all([
+    getMenuPageWeekData(shell.initialWeekStart, shell.initialWeekEnd),
+    getMenuPagePeriodSelections(shell.deliveryStart, shell.deliveryEnd),
+  ]);
 
   return (
     <MenuWeekHydrationProvider>
       <MenuSelectionView
         {...shellToViewProps(shell)}
         initialMenus={weekData.menus}
-        initialSelections={weekData.selections}
+        initialSelections={periodSelections}
       />
     </MenuWeekHydrationProvider>
   );

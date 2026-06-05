@@ -279,7 +279,15 @@ export function MenuSelectionView({
   const weekKeys = useMemo(() => Object.keys(weeks).sort(), [weeks]);
 
   const [currentWeekIdx, setCurrentWeekIdx] = useState(0);
+  const userPickedWeekRef = useRef(false);
+  const deliveryPeriodKey = `${deliveryStart ?? ""}|${deliveryEnd ?? ""}`;
+  const weekKeysKey = weekKeys.join(",");
   const chipStripRef = useRef<HTMLDivElement>(null);
+
+  const goToWeek = useCallback((idx: number) => {
+    userPickedWeekRef.current = true;
+    setCurrentWeekIdx(idx);
+  }, []);
   // Track drag vs click: only setPointerCapture after movement >5px so child button clicks still fire.
   const chipDragRef = useRef({ dragging: false, startX: 0, scrollLeft: 0, wasDrag: false, pointerId: 0 });
   const currentWeekKey = weekKeys[currentWeekIdx] ?? "";
@@ -310,6 +318,25 @@ export function MenuSelectionView({
   useEffect(() => {
     void getMyFavoriteIds().then((ids) => setFavoriteIds(new Set(ids)));
   }, []);
+
+  // Keep chips + progress bar in sync with DB for the whole period (not only the
+  // opened week's menus). Lightweight; runs once per delivery period.
+  useEffect(() => {
+    if (!deliveryStart || !deliveryEnd || isBrowseOnly) return;
+
+    void getMyMenuSelectionsSummary(deliveryStart, deliveryEnd).then((selData) => {
+      setSelections((prev) => {
+        const key = (s: MenuSelection) =>
+          `${s.user_id}|${s.delivery_date}|${s.daily_menu_id}`;
+        const existing = new Set(prev.map(key));
+        const merged = [...prev];
+        for (const s of selData) {
+          if (!existing.has(key(s))) merged.push(s);
+        }
+        return merged.length === prev.length ? prev : merged;
+      });
+    });
+  }, [deliveryStart, deliveryEnd, isBrowseOnly]);
 
   useEffect(() => {
     if (!hasInitialData && !weekDataPending) loadData();
@@ -360,6 +387,12 @@ export function MenuSelectionView({
   );
 
   useEffect(() => {
+    userPickedWeekRef.current = false;
+  }, [deliveryPeriodKey]);
+
+  // Set initial week once per period (or when ?date= changes). Do not reset when
+  // parent re-renders after a menu save — that was jumping users back to week 1.
+  useEffect(() => {
     if (weekKeys.length === 0) return;
 
     if (initialFocusDate) {
@@ -367,9 +400,12 @@ export function MenuSelectionView({
       const idx = weekKeys.indexOf(focusWeek);
       if (idx >= 0) {
         setCurrentWeekIdx(idx);
-        return;
+        userPickedWeekRef.current = true;
       }
+      return;
     }
+
+    if (userPickedWeekRef.current) return;
 
     const today = new Date();
     const todayStrLocal = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -391,7 +427,7 @@ export function MenuSelectionView({
     } else {
       setCurrentWeekIdx(weekKeys.length - 1);
     }
-  }, [weekKeys, weekdays, initialFocusDate]);
+  }, [weekKeysKey, weekdays, initialFocusDate]);
 
   // When the user navigates to a week, make sure its data is fetched. Neighbor
   // weeks prefetch after idle so initial load stays fast. Skip refetch while the
@@ -406,7 +442,9 @@ export function MenuSelectionView({
       !loadedWeeksRef.current.has(initialWeekMonday);
 
     if (!initialWeekStillStreaming) {
-      void loadWeek(currentWeekKey, { showSkeleton: true });
+      void loadWeek(currentWeekKey, {
+        showSkeleton: !loadedWeeksRef.current.has(currentWeekKey),
+      });
     }
 
     const prefetchNeighbors = () => {
@@ -454,44 +492,63 @@ export function MenuSelectionView({
     );
   }
 
+  function applySelectionUpdate(
+    prev: MenuSelection[],
+    dailyMenuId: string,
+    dateStr: string,
+    newQuantity: number,
+    replaceForDate: boolean
+  ): MenuSelection[] {
+    let filtered = prev.filter(
+      (s) => !(s.delivery_date === dateStr && s.daily_menu_id === dailyMenuId)
+    );
+    if (replaceForDate) {
+      filtered = filtered.filter((s) => s.delivery_date !== dateStr);
+    }
+    if (newQuantity <= 0) return filtered;
+    const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
+    return [
+      ...filtered,
+      {
+        id: `temp-${Date.now()}`,
+        user_id: "",
+        daily_menu_id: dailyMenuId,
+        delivery_date: dateStr,
+        quantity: newQuantity,
+        daily_menu_assignment: matchingMenu ?? null,
+        created_at: new Date().toISOString(),
+      } as MenuSelection,
+    ];
+  }
+
   async function handleQuantityChange(
     dailyMenuId: string,
     dateStr: string,
     newQuantity: number
   ) {
     const replaceForDate = saladsPerDelivery <= 1 && newQuantity > 0;
+    const previousSelections = selections;
+
+    setSelections((prev) =>
+      applySelectionUpdate(prev, dailyMenuId, dateStr, newQuantity, replaceForDate)
+    );
+
     setUpdatingMenuId(dailyMenuId);
     try {
-      const result = await updateMenuQuantity(dailyMenuId, dateStr, newQuantity, replaceForDate);
+      const result = await updateMenuQuantity(
+        dailyMenuId,
+        dateStr,
+        newQuantity,
+        replaceForDate
+      );
       if (result.error) {
+        setSelections(previousSelections);
         if (handleActionError(result.error, router)) return;
         toast.error(result.error);
-        return;
       }
-
-      setSelections((prev) => {
-        let filtered = prev.filter(
-          (s) =>
-            !(s.delivery_date === dateStr && s.daily_menu_id === dailyMenuId)
-        );
-        if (replaceForDate) {
-          filtered = filtered.filter((s) => s.delivery_date !== dateStr);
-        }
-        if (newQuantity <= 0) return filtered;
-        const matchingMenu = dailyMenus.find((dm) => dm.id === dailyMenuId);
-        return [
-          ...filtered,
-          {
-            id: `temp-${Date.now()}`,
-            user_id: "",
-            daily_menu_id: dailyMenuId,
-            delivery_date: dateStr,
-            quantity: newQuantity,
-            daily_menu_assignment: matchingMenu ?? null,
-            created_at: new Date().toISOString(),
-          } as MenuSelection,
-        ];
-      });
+    } catch {
+      setSelections(previousSelections);
+      toast.error("메뉴 저장에 실패했어요. 다시 시도해 주세요.");
     } finally {
       setUpdatingMenuId(null);
     }
@@ -695,7 +752,7 @@ export function MenuSelectionView({
                   key={dateStr}
                   onClick={() => {
                     if (chipDragRef.current.wasDrag) return; // swallow click after drag
-                    setCurrentWeekIdx(wkIdx);
+                    goToWeek(wkIdx);
                     setTimeout(() => {
                       document.getElementById(`day-${dateStr}`)?.scrollIntoView({
                         behavior: "smooth",
@@ -888,7 +945,7 @@ export function MenuSelectionView({
             variant="ghost"
             size="sm"
             disabled={currentWeekIdx <= 0}
-            onClick={() => setCurrentWeekIdx((i) => i - 1)}
+            onClick={() => goToWeek(currentWeekIdx - 1)}
             className="gap-1 text-muted-foreground"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -901,7 +958,7 @@ export function MenuSelectionView({
             variant="ghost"
             size="sm"
             disabled={currentWeekIdx >= weekKeys.length - 1}
-            onClick={() => setCurrentWeekIdx((i) => i + 1)}
+            onClick={() => goToWeek(currentWeekIdx + 1)}
             className="gap-1 text-muted-foreground"
           >
             다음 주

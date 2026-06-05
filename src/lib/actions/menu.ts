@@ -398,8 +398,9 @@ export async function updateMenuQuantity(
   // A user picking / updating / clearing a menu for a date changes the
   // vendor report totals and the admin subscription-status drill-down for
   // that date. Invalidate both after any successful mutation below.
+  // Menu page keeps selections in client state — skip /menu revalidation to avoid
+  // Suspense refetch and week-index reset while the user is selecting.
   const revalidateRelated = () => {
-    revalidatePath("/menu");
     revalidatePath("/admin/subscription-status");
     revalidatePath("/admin/reports");
   };

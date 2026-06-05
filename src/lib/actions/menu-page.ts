@@ -15,7 +15,7 @@ import {
   resolveInitialWeekMonday,
   getWeekRange,
 } from "@/lib/menu-week-utils";
-import type { Subscription, SubscriptionPeriod } from "@/types";
+import type { MenuSelection, Subscription, SubscriptionPeriod } from "@/types";
 import type { MenuPageShellData, MenuPageWeekData } from "@/lib/menu-page-types";
 
 export type { MenuPageShellData, MenuPageWeekData } from "@/lib/menu-page-types";
@@ -154,14 +154,19 @@ export async function getMenuPageShellData(
   };
 }
 
-/** Slow path: menu assignments + selection summary for one week. */
+/** Menu assignments for one week (lazy-loaded when navigating weeks). */
 export async function getMenuPageWeekData(
   weekStart: string,
   weekEnd: string
 ): Promise<MenuPageWeekData> {
-  const [menus, selections] = await Promise.all([
-    getDailyMenus(weekStart, weekEnd),
-    getMyMenuSelectionsSummary(weekStart, weekEnd),
-  ]);
-  return { menus, selections };
+  const menus = await getDailyMenus(weekStart, weekEnd);
+  return { menus, selections: [] };
+}
+
+/** All selections in the visible period — powers chips + progress bar on first paint. */
+export async function getMenuPagePeriodSelections(
+  deliveryStart: string,
+  deliveryEnd: string
+): Promise<MenuSelection[]> {
+  return getMyMenuSelectionsSummary(deliveryStart, deliveryEnd);
 }
