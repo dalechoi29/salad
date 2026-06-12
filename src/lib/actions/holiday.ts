@@ -1,32 +1,42 @@
 "use server";
 
 import { cache } from "react";
-import { createClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { createClient, createPublicClient } from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type { ActionResult, Holiday } from "@/types";
+
+// Holidays are identical for every user and change only via admin actions —
+// cache across requests; mutations below bust the tag immediately.
+const fetchHolidaysCached = unstable_cache(
+  async (year?: number, month?: number): Promise<Holiday[]> => {
+    const supabase = createPublicClient();
+
+    let query = supabase.from("holidays").select("*").order("holiday_date");
+
+    if (year && month) {
+      const start = `${year}-${String(month).padStart(2, "0")}-01`;
+      const endMonth = month === 12 ? 1 : month + 1;
+      const endYear = month === 12 ? year + 1 : year;
+      const end = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+      query = query.gte("holiday_date", start).lt("holiday_date", end);
+    } else if (year) {
+      query = query
+        .gte("holiday_date", `${year}-01-01`)
+        .lt("holiday_date", `${year + 1}-01-01`);
+    }
+
+    const { data } = await query;
+    return (data as Holiday[]) ?? [];
+  },
+  ["holidays"],
+  { revalidate: 3600, tags: ["holidays"] }
+);
 
 export const getHolidays = cache(async function getHolidays(
   year?: number,
   month?: number
 ): Promise<Holiday[]> {
-  const supabase = await createClient();
-
-  let query = supabase.from("holidays").select("*").order("holiday_date");
-
-  if (year && month) {
-    const start = `${year}-${String(month).padStart(2, "0")}-01`;
-    const endMonth = month === 12 ? 1 : month + 1;
-    const endYear = month === 12 ? year + 1 : year;
-    const end = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
-    query = query.gte("holiday_date", start).lt("holiday_date", end);
-  } else if (year) {
-    query = query
-      .gte("holiday_date", `${year}-01-01`)
-      .lt("holiday_date", `${year + 1}-01-01`);
-  }
-
-  const { data } = await query;
-  return (data as Holiday[]) ?? [];
+  return fetchHolidaysCached(year, month);
 });
 
 async function cleanupDeliveryDaysForHoliday(
@@ -59,6 +69,8 @@ export async function addHoliday(
 
   await cleanupDeliveryDaysForHoliday(supabase, date);
 
+  updateTag("holidays");
+  updateTag("day-counts");
   revalidatePath("/admin/holidays");
   revalidatePath("/delivery");
   return { success: true };
@@ -71,6 +83,8 @@ export async function removeHoliday(id: string): Promise<ActionResult> {
 
   if (error) return { error: error.message };
 
+  updateTag("holidays");
+  updateTag("day-counts");
   revalidatePath("/admin/holidays");
   revalidatePath("/delivery");
   return { success: true };
@@ -125,6 +139,8 @@ export async function importKoreanHolidays(
     await cleanupDeliveryDaysForHoliday(supabase, h.holiday_date);
   }
 
+  updateTag("holidays");
+  updateTag("day-counts");
   revalidatePath("/admin/holidays");
   revalidatePath("/delivery");
   return { success: true };

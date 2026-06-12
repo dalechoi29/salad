@@ -56,6 +56,24 @@ export const getAuthUser = cache(async () => {
 });
 
 /**
+ * Cookie-free anon client for user-independent reads (holidays, menus,
+ * periods, settings). Safe to use inside `unstable_cache`, which forbids
+ * accessing cookies. All target tables are anon-readable via RLS.
+ */
+export function createPublicClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !url.startsWith("http") || !anonKey) {
+    return createMockClient();
+  }
+
+  return createJsClient(url, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  }) as unknown as ReturnType<typeof createServerClient>;
+}
+
+/**
  * Creates a Supabase client with the service role key that bypasses RLS.
  * Only use this for admin operations that require elevated privileges
  * (e.g., deleting auth users, bypassing RLS for deletions).

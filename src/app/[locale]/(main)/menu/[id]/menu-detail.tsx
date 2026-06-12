@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -106,11 +107,16 @@ export function MenuDetail({ menu }: { menu: Menu }) {
       </div>
 
       {menu.image_url ? (
-        <img
-          src={menu.image_url}
-          alt={menu.title}
-          className="aspect-[4/3] w-full rounded-xl object-cover"
-        />
+        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl">
+          <Image
+            src={menu.image_url}
+            alt={menu.title}
+            fill
+            priority
+            sizes="(min-width: 768px) 42rem, 100vw"
+            className="object-cover"
+          />
+        </div>
       ) : (
         <div className="flex aspect-[4/3] w-full items-center justify-center rounded-xl bg-muted">
           <UtensilsCrossed className="h-12 w-12 text-muted-foreground" />

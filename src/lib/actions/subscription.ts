@@ -1,7 +1,12 @@
 "use server";
 
-import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import {
+  createClient,
+  createAdminClient,
+  createPublicClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import { getKSTDate, formatDateISO } from "@/lib/utils";
 import type {
   ActionResult,
@@ -12,13 +17,22 @@ import type {
 
 // ─── Subscription Periods (Admin) ────────────────────────────
 
+// Periods are global config rows; admin mutations below bust the tag.
+const fetchSubscriptionPeriodsCached = unstable_cache(
+  async (): Promise<SubscriptionPeriod[]> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("subscription_periods")
+      .select("*")
+      .order("apply_start", { ascending: false });
+    return (data as SubscriptionPeriod[]) ?? [];
+  },
+  ["subscription-periods"],
+  { revalidate: 600, tags: ["periods"] }
+);
+
 export async function getSubscriptionPeriods(): Promise<SubscriptionPeriod[]> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .order("apply_start", { ascending: false });
-  return (data as SubscriptionPeriod[]) ?? [];
+  return fetchSubscriptionPeriodsCached();
 }
 
 export async function getSubscriptionPeriodById(
@@ -99,6 +113,7 @@ export async function createSubscriptionPeriod(
 
   if (error) return { error: error.message };
 
+  updateTag("periods");
   revalidatePath("/admin/subscriptions");
   revalidatePath("/admin/subscription-status");
   return { success: true, id: data.id as string };
@@ -117,6 +132,7 @@ export async function updateSubscriptionPeriod(
 
   if (error) return { error: error.message };
 
+  updateTag("periods");
   revalidatePath("/admin/subscriptions");
   revalidatePath("/admin/subscription-status");
   return { success: true };
@@ -134,6 +150,7 @@ export async function deleteSubscriptionPeriod(
 
   if (error) return { error: error.message };
 
+  updateTag("periods");
   revalidatePath("/admin/subscriptions");
   revalidatePath("/admin/subscription-status");
   return { success: true };
@@ -177,6 +194,7 @@ export async function cancelSubscription(
     .delete()
     .eq("subscription_id", subscriptionId);
 
+  updateTag("day-counts");
   revalidatePath("/subscription");
   revalidatePath("/delivery");
   revalidatePath("/");

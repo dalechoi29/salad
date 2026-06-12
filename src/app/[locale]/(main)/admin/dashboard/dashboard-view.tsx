@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -18,27 +20,21 @@ import {
   Loader2,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
 import type { DashboardStats } from "@/lib/actions/admin";
 import { getDashboardStats } from "@/lib/actions/admin";
 import type { SubscriptionPeriod } from "@/types";
 
-const COLORS = [
-  "#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6",
-  "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
-];
+// Recharts is heavy; load it only in the browser after the dashboard shell
+// paints instead of shipping it in the route's SSR bundle.
+const chartLoading = () => <Skeleton className="h-[280px] w-full" />;
+const DailyDeliveryBarChart = dynamic(
+  () => import("./dashboard-charts").then((m) => m.DailyDeliveryBarChart),
+  { ssr: false, loading: chartLoading }
+);
+const MenuPopularityPieChart = dynamic(
+  () => import("./dashboard-charts").then((m) => m.MenuPopularityPieChart),
+  { ssr: false, loading: chartLoading }
+);
 
 interface DashboardViewProps {
   initialStats: DashboardStats;
@@ -147,30 +143,7 @@ export function DashboardView({ initialStats, periods }: DashboardViewProps) {
                 데이터가 없습니다
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={dailyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 11 }}
-                    className="fill-muted-foreground"
-                  />
-                  <YAxis
-                    tick={{ fontSize: 11 }}
-                    className="fill-muted-foreground"
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      borderColor: "hsl(var(--border))",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Bar dataKey="주문수" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <DailyDeliveryBarChart data={dailyChartData} />
             )}
           </CardContent>
         </Card>
@@ -186,38 +159,7 @@ export function DashboardView({ initialStats, periods }: DashboardViewProps) {
                 데이터가 없습니다
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={90}
-                    paddingAngle={2}
-                    dataKey="value"
-                    label={({ name, percent }: { name?: string; percent?: number }) =>
-                      `${name ?? ""} (${((percent ?? 0) * 100).toFixed(0)}%)`
-                    }
-                    labelLine={false}
-                  >
-                    {pieData.map((_, idx) => (
-                      <Cell
-                        key={idx}
-                        fill={COLORS[idx % COLORS.length]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      borderColor: "hsl(var(--border))",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <MenuPopularityPieChart data={pieData} />
             )}
           </CardContent>
         </Card>

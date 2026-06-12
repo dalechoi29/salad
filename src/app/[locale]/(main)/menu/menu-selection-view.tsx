@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import Image from "next/image";
 import {
   Card,
   CardContent,
@@ -127,7 +128,14 @@ function PerDaySideSection({
               >
                 <div className="flex-shrink-0">
                   {menu.image_url ? (
-                    <img src={menu.image_url} alt={menu.title} className="h-14 w-14 rounded-lg object-cover" />
+                    <Image
+                      src={menu.image_url}
+                      alt={menu.title}
+                      width={56}
+                      height={56}
+                      sizes="56px"
+                      className="h-14 w-14 rounded-lg object-cover"
+                    />
                   ) : (
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-muted">
                       <UtensilsCrossed className="h-5 w-5 text-muted-foreground" />
@@ -318,25 +326,6 @@ export function MenuSelectionView({
   useEffect(() => {
     void getMyFavoriteIds().then((ids) => setFavoriteIds(new Set(ids)));
   }, []);
-
-  // Keep chips + progress bar in sync with DB for the whole period (not only the
-  // opened week's menus). Lightweight; runs once per delivery period.
-  useEffect(() => {
-    if (!deliveryStart || !deliveryEnd || isBrowseOnly) return;
-
-    void getMyMenuSelectionsSummary(deliveryStart, deliveryEnd).then((selData) => {
-      setSelections((prev) => {
-        const key = (s: MenuSelection) =>
-          `${s.user_id}|${s.delivery_date}|${s.daily_menu_id}`;
-        const existing = new Set(prev.map(key));
-        const merged = [...prev];
-        for (const s of selData) {
-          if (!existing.has(key(s))) merged.push(s);
-        }
-        return merged.length === prev.length ? prev : merged;
-      });
-    });
-  }, [deliveryStart, deliveryEnd, isBrowseOnly]);
 
   useEffect(() => {
     if (!hasInitialData && !weekDataPending) loadData();
@@ -877,9 +866,12 @@ export function MenuSelectionView({
                             {/* Compact 56×56 thumbnail */}
                             <div className="flex-shrink-0">
                               {menu.image_url ? (
-                                <img
+                                <Image
                                   src={menu.image_url}
                                   alt={menu.title}
+                                  width={56}
+                                  height={56}
+                                  sizes="56px"
                                   className="h-14 w-14 rounded-lg object-cover"
                                 />
                               ) : (

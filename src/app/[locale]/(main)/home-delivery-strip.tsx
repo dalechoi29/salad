@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import Image from "next/image";
 import { Check, UtensilsCrossed } from "lucide-react";
 import { isSelectionClosed, formatDateFull, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -62,9 +63,12 @@ function MenuCompactRow({ menu }: { menu: MenuDetail }) {
   const row = (
     <div className="flex min-w-0 items-center gap-3">
       {menu.imageUrl ? (
-        <img
+        <Image
           src={menu.imageUrl}
           alt={menu.title}
+          width={56}
+          height={56}
+          sizes="56px"
           className="h-14 w-14 shrink-0 rounded-lg object-cover"
         />
       ) : (

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import Image from "next/image";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -381,11 +382,15 @@ function HomeContent({
                 <Link key={dm.id} href={`/menu/${dm.menu.id}`}>
                   <Card className="overflow-hidden py-0 transition-colors hover:bg-accent/50">
                     {dm.menu.image_url ? (
-                      <img
-                        src={dm.menu.image_url}
-                        alt={dm.menu.title}
-                        className="aspect-square w-full object-cover"
-                      />
+                      <div className="relative aspect-square w-full">
+                        <Image
+                          src={dm.menu.image_url}
+                          alt={dm.menu.title}
+                          fill
+                          sizes="(min-width: 768px) 21rem, 50vw"
+                          className="object-cover"
+                        />
+                      </div>
                     ) : (
                       <div className="flex aspect-square w-full items-center justify-center bg-muted">
                         <UtensilsCrossed className="h-8 w-8 text-muted-foreground" />

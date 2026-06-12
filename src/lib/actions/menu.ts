@@ -1,7 +1,12 @@
 "use server";
 
-import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import {
+  createClient,
+  createAdminClient,
+  createPublicClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type { ActionResult, Menu, DailyMenu, MenuSelection, MenuFavorite } from "@/types";
 import { userHasActiveHoldCoveringDeliveryDate } from "@/lib/subscription-hold-guard";
 
@@ -53,6 +58,7 @@ export async function createMenu(
 
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   return { success: true, menuId: data.id };
 }
@@ -66,6 +72,7 @@ export async function updateMenu(
   const { error } = await supabase.from("menus").update(updates).eq("id", id);
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   return { success: true };
 }
@@ -76,6 +83,7 @@ export async function deleteMenu(id: string): Promise<ActionResult> {
   const { error } = await supabase.from("menus").delete().eq("id", id);
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   return { success: true };
 }
@@ -106,75 +114,65 @@ export async function uploadMenuImage(formData: FormData): Promise<{ url?: strin
 
 // ─── Daily Menu Assignments (Admin) ─────────────────────────
 
+// One round-trip via nested select. The duplicated menu payload per row is
+// small (weekly windows are ~30 rows) and cheaper than a second query.
+const DAILY_MENU_SELECT =
+  "id, delivery_date, menu_id, slot_type, created_at, menu:menus(*)";
+
+// Daily menus are identical for every user — cache across requests with a
+// short TTL; admin assignment/menu mutations bust the tag immediately.
+const fetchDailyMenusCached = unstable_cache(
+  async (startDate: string, endDate: string): Promise<DailyMenu[]> => {
+    const supabase = createPublicClient();
+
+    const { data } = await supabase
+      .from("daily_menu_assignments")
+      .select(DAILY_MENU_SELECT)
+      .gte("delivery_date", startDate)
+      .lte("delivery_date", endDate)
+      .order("delivery_date");
+
+    return (data as unknown as DailyMenu[]) ?? [];
+  },
+  ["daily-menus"],
+  { revalidate: 60, tags: ["menus"] }
+);
+
 export async function getDailyMenus(
   startDate: string,
   endDate: string
 ): Promise<DailyMenu[]> {
-  const supabase = await createClient();
-
-  const { data } = await supabase
-    .from("daily_menu_assignments")
-    .select("id, delivery_date, menu_id, slot_type, created_at")
-    .gte("delivery_date", startDate)
-    .lte("delivery_date", endDate)
-    .order("delivery_date");
-
-  return hydrateDailyMenus(supabase, (data as DailyMenu[]) ?? []);
+  return fetchDailyMenusCached(startDate, endDate);
 }
 
-export async function getDailyMenusByDate(
-  date: string
-): Promise<DailyMenu[]> {
-  const supabase = await createClient();
-
-  const { data } = await supabase
-    .from("daily_menu_assignments")
-    .select("id, delivery_date, menu_id, slot_type, created_at")
-    .eq("delivery_date", date)
-    .order("slot_type");
-
-  return hydrateDailyMenus(supabase, (data as DailyMenu[]) ?? []);
+export async function getDailyMenusByDate(date: string): Promise<DailyMenu[]> {
+  const rows = await fetchDailyMenusCached(date, date);
+  return [...rows].sort((a, b) =>
+    (a.slot_type ?? "").localeCompare(b.slot_type ?? "")
+  );
 }
 
 export async function getDailyMenusByDates(
   dates: string[]
 ): Promise<Record<string, DailyMenu[]>> {
   if (dates.length === 0) return {};
-  const supabase = await createClient();
 
-  const { data } = await supabase
-    .from("daily_menu_assignments")
-    .select("id, delivery_date, menu_id, slot_type, created_at")
-    .in("delivery_date", dates)
-    .order("slot_type");
+  // One cached range fetch covers the dates; filter locally.
+  const sorted = [...dates].sort();
+  const rows = await fetchDailyMenusCached(sorted[0], sorted[sorted.length - 1]);
+  const wanted = new Set(dates);
 
-  const hydrated = await hydrateDailyMenus(supabase, (data as DailyMenu[]) ?? []);
   const result: Record<string, DailyMenu[]> = {};
   for (const d of dates) result[d] = [];
-  for (const row of hydrated) {
-    const date = (row as any).delivery_date;
-    if (date) (result[date] ??= []).push(row);
+  for (const row of rows) {
+    if (row.delivery_date && wanted.has(row.delivery_date)) {
+      (result[row.delivery_date] ??= []).push(row);
+    }
+  }
+  for (const d of dates) {
+    result[d].sort((a, b) => (a.slot_type ?? "").localeCompare(b.slot_type ?? ""));
   }
   return result;
-}
-
-async function hydrateDailyMenus(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  assignments: DailyMenu[]
-): Promise<DailyMenu[]> {
-  if (assignments.length === 0) return [];
-
-  // Fetch menu metadata once per unique menu instead of repeating
-  // `menus(*)` for every daily assignment row. This matters because
-  // sandwich/bowl menus are fixed and assigned across many dates.
-  const menuIds = [...new Set(assignments.map((a) => a.menu_id))];
-  const { data: menus } = await supabase.from("menus").select("*").in("id", menuIds);
-  const menuMap = new Map((menus as Menu[] | null ?? []).map((menu) => [menu.id, menu]));
-
-  return assignments.map((assignment) => ({
-    ...assignment,
-    menu: menuMap.get(assignment.menu_id),
-  }));
 }
 
 export async function assignMenuToDate(
@@ -193,6 +191,7 @@ export async function assignMenuToDate(
 
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   revalidatePath("/menu");
   // Menu planning changes how unselected salads are attributed in the
@@ -304,6 +303,7 @@ export async function assignFixedSideMenusToOpenDates(): Promise<
 
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   revalidatePath("/admin/menus/assignments");
   revalidatePath("/menu");
@@ -330,6 +330,7 @@ export async function removeMenuFromDate(
 
   if (error) return { error: error.message };
 
+  updateTag("menus");
   revalidatePath("/admin/menus");
   revalidatePath("/menu");
   revalidatePath("/admin/subscription-status");

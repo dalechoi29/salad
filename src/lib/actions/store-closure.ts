@@ -1,8 +1,13 @@
 "use server";
 
 import { cache } from "react";
-import { revalidatePath } from "next/cache";
-import { createAdminClient, createClient, getAuthUser } from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
+import {
+  createAdminClient,
+  createClient,
+  createPublicClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
 import type { ActionResult, StoreClosure } from "@/types";
 
 function getMondayISO(dateStr: string): string {
@@ -92,20 +97,29 @@ async function cleanupSelectionsForClosure(
   return { affectedCount: affected, affectedSubIds: [...affectedSubIds] };
 }
 
+// Closures are user-independent and only change via admin actions.
+const fetchStoreClosuresCached = unstable_cache(
+  async (year?: number): Promise<StoreClosure[]> => {
+    const supabase = createPublicClient();
+    let query = supabase.from("store_closures").select("*").order("closure_date");
+
+    if (year) {
+      query = query
+        .gte("closure_date", `${year}-01-01`)
+        .lt("closure_date", `${year + 1}-01-01`);
+    }
+
+    const { data } = await query;
+    return (data as StoreClosure[]) ?? [];
+  },
+  ["store-closures"],
+  { revalidate: 3600, tags: ["closures"] }
+);
+
 export const getStoreClosures = cache(async function getStoreClosures(
   year?: number
 ): Promise<StoreClosure[]> {
-  const supabase = await createClient();
-  let query = supabase.from("store_closures").select("*").order("closure_date");
-
-  if (year) {
-    query = query
-      .gte("closure_date", `${year}-01-01`)
-      .lt("closure_date", `${year + 1}-01-01`);
-  }
-
-  const { data } = await query;
-  return (data as StoreClosure[]) ?? [];
+  return fetchStoreClosuresCached(year);
 });
 
 export async function addStoreClosure(
@@ -169,6 +183,8 @@ export async function addStoreClosureRange(
       .in("id", [...directlyAffectedSubIds]);
   }
 
+  updateTag("closures");
+  updateTag("day-counts");
   revalidatePath("/", "layout");
   revalidatePath("/delivery");
   revalidatePath("/menu");
@@ -187,6 +203,7 @@ export async function removeStoreClosure(id: string): Promise<ActionResult> {
   const { error } = await admin.from("store_closures").delete().eq("id", id);
   if (error) return { error: error.message };
 
+  updateTag("closures");
   revalidatePath("/", "layout");
   revalidatePath("/delivery");
   revalidatePath("/menu");

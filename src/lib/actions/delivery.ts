@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expandDeliveryDaysToDateStrings } from "@/lib/delivery-days";
@@ -361,6 +361,7 @@ export async function adminUpdateDeliveryDates(
     deliveryDates
   );
 
+  updateTag("day-counts");
   revalidatePath("/", "layout");
   return { success: true };
 }
@@ -461,6 +462,7 @@ export async function saveDeliveryDays(
     newDates
   );
 
+  updateTag("day-counts");
   revalidatePath("/delivery");
   revalidatePath("/");
   revalidatePath("/admin/subscription-status");
@@ -582,6 +584,7 @@ export async function bulkSaveDeliveryDays(
     newDates
   );
 
+  updateTag("day-counts");
   revalidatePath("/delivery");
   revalidatePath("/");
   revalidatePath("/admin/subscription-status");

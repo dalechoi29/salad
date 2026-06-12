@@ -1,28 +1,33 @@
 "use server";
 
 import { cache } from "react";
-import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import {
+  createClient,
+  createAdminClient,
+  createPublicClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type {
   ActionResult,
   DailySaladStatus,
   SubscriptionHoldDurationKind,
 } from "@/types";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
+import { getCurrentProfile } from "@/lib/actions/auth";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const SUPER_ADMIN_ROLES = ["super_admin"];
 
+// Reuses the request-cached profile row instead of issuing another
+// `profiles` query per permission check.
+const getCallerRoleCached = cache(async (): Promise<string | null> => {
+  const profile = await getCurrentProfile();
+  return profile?.role ?? null;
+});
+
 async function getCallerRole(): Promise<string | null> {
-  const supabase = await createClient();
-  const user = await getAuthUser();
-  if (!user) return null;
-  const { data } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-  return data?.role ?? null;
+  return getCallerRoleCached();
 }
 
 function isAnyAdmin(role: string | null): boolean {
@@ -33,19 +38,12 @@ function isSuperAdmin(role: string | null): boolean {
   return !!role && SUPER_ADMIN_ROLES.includes(role);
 }
 
-async function hasPermission(permission: string): Promise<boolean> {
-  const supabase = await createClient();
-  const user = await getAuthUser();
-  if (!user) return false;
+const hasPermissionCached = cache(async (permission: string): Promise<boolean> => {
+  const profile = await getCurrentProfile();
+  if (!profile) return false;
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.role === "super_admin") return true;
-  if (profile?.role !== "admin") return false;
+  if (profile.role === "super_admin") return true;
+  if (profile.role !== "admin") return false;
 
   // Read admin_permissions via service role client. The `admin_permissions`
   // RLS policy only allows super_admin reads, which would otherwise prevent
@@ -55,11 +53,15 @@ async function hasPermission(permission: string): Promise<boolean> {
   const { data } = await admin
     .from("admin_permissions")
     .select("id")
-    .eq("user_id", user.id)
+    .eq("user_id", profile.id)
     .eq("permission", permission)
     .limit(1);
 
   return (data?.length ?? 0) > 0;
+});
+
+async function hasPermission(permission: string): Promise<boolean> {
+  return hasPermissionCached(permission);
 }
 
 export async function getCallerAdminRole(): Promise<"super_admin" | "admin" | null> {
@@ -86,23 +88,20 @@ export async function getUserPermissions(userId: string): Promise<string[]> {
   return (data ?? []).map((r: any) => r.permission);
 }
 
-export async function getMyPermissions(): Promise<string[]> {
-  const supabase = await createClient();
-  const user = await getAuthUser();
-  if (!user) return [];
+const getMyPermissionsCached = cache(async (): Promise<string[]> => {
+  const profile = await getCurrentProfile();
+  if (!profile) return [];
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.role === "super_admin") {
+  if (profile.role === "super_admin") {
     return ALL_PERMISSIONS.map((p) => p.key);
   }
-  if (profile?.role !== "admin") return [];
+  if (profile.role !== "admin") return [];
 
-  return getUserPermissions(user.id);
+  return getUserPermissions(profile.id);
+});
+
+export async function getMyPermissions(): Promise<string[]> {
+  return getMyPermissionsCached();
 }
 
 export async function updateUserPermissions(
@@ -213,23 +212,32 @@ export async function getAdminSettings(): Promise<Record<string, string>> {
   return settings;
 }
 
-export const getMenuSelectionCutoff = cache(async (): Promise<{ day: number; time: string }> => {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("admin_settings")
-    .select("key, value")
-    .in("key", ["menu_selection_cutoff_day", "menu_selection_cutoff_time"]);
+const fetchMenuSelectionCutoffCached = unstable_cache(
+  async (): Promise<{ day: number; time: string }> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("admin_settings")
+      .select("key, value")
+      .in("key", ["menu_selection_cutoff_day", "menu_selection_cutoff_time"]);
 
-  const settings: Record<string, string> = {};
-  for (const row of data ?? []) {
-    settings[row.key] = row.value;
-  }
+    const settings: Record<string, string> = {};
+    for (const row of data ?? []) {
+      settings[row.key] = row.value;
+    }
 
-  return {
-    day: parseInt(settings.menu_selection_cutoff_day ?? "4", 10),
-    time: settings.menu_selection_cutoff_time ?? "23:59",
-  };
-});
+    return {
+      day: parseInt(settings.menu_selection_cutoff_day ?? "4", 10),
+      time: settings.menu_selection_cutoff_time ?? "23:59",
+    };
+  },
+  ["menu-selection-cutoff"],
+  { revalidate: 600, tags: ["settings"] }
+);
+
+export const getMenuSelectionCutoff = cache(
+  async (): Promise<{ day: number; time: string }> =>
+    fetchMenuSelectionCutoffCached()
+);
 
 export async function updateAdminSetting(
   key: string,
@@ -244,6 +252,7 @@ export async function updateAdminSetting(
 
   if (error) return { error: error.message };
 
+  updateTag("settings");
   revalidatePath("/admin");
   return { success: true };
 }
@@ -314,19 +323,27 @@ export type WeeklyMenuDeadline = {
   deadline_at: string;
 };
 
+const fetchWeeklyMenuDeadlinesCached = unstable_cache(
+  async (startDate: string, endDate: string): Promise<WeeklyMenuDeadline[]> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("menu_selection_deadlines")
+      .select("id, week_start, deadline_at")
+      .gte("week_start", startDate)
+      .lte("week_start", endDate)
+      .order("week_start");
+
+    return (data as WeeklyMenuDeadline[]) ?? [];
+  },
+  ["weekly-menu-deadlines"],
+  { revalidate: 600, tags: ["settings"] }
+);
+
 export async function getWeeklyMenuDeadlines(
   startDate: string,
   endDate: string
 ): Promise<WeeklyMenuDeadline[]> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("menu_selection_deadlines")
-    .select("id, week_start, deadline_at")
-    .gte("week_start", startDate)
-    .lte("week_start", endDate)
-    .order("week_start");
-
-  return (data as WeeklyMenuDeadline[]) ?? [];
+  return fetchWeeklyMenuDeadlinesCached(startDate, endDate);
 }
 
 export async function upsertWeeklyMenuDeadline(
@@ -349,6 +366,7 @@ export async function upsertWeeklyMenuDeadline(
 
   if (error) return { error: error.message };
 
+  updateTag("settings");
   revalidatePath("/menu");
   revalidatePath("/admin/settings");
   revalidatePath("/admin/reports");
@@ -366,6 +384,7 @@ export async function deleteWeeklyMenuDeadline(id: string): Promise<ActionResult
 
   if (error) return { error: error.message };
 
+  updateTag("settings");
   revalidatePath("/menu");
   revalidatePath("/admin/settings");
   revalidatePath("/admin/reports");
@@ -1113,49 +1132,59 @@ export async function getDeliverySummary(
 export async function getSubscriptionDayCounts(
   periodId: string
 ): Promise<Record<string, number>> {
-  const supabase = await createClient();
-
-  const { data: subscriptions } = await supabase
-    .from("subscriptions")
-    .select("id, salads_per_delivery")
-    .eq("period_id", periodId);
-
-  if (!subscriptions?.length) return {};
-
-  const subIds = subscriptions.map((s: any) => s.id);
-  const saladsMap = new Map<string, number>();
-  for (const s of subscriptions) {
-    saladsMap.set(s.id, s.salads_per_delivery ?? 1);
-  }
-
-  const [{ data: disabledProfiles }, { data: deliveryDays }] = await Promise.all([
-    supabase.from("profiles").select("id").eq("status", "disabled"),
-    supabase.from("delivery_days").select("subscription_id, week_start, selected_days, user_id").in("subscription_id", subIds),
-  ]);
-
-  if (!deliveryDays?.length) return {};
-
-  const disabledUserIds = new Set(
-    (disabledProfiles ?? []).map((p: any) => p.id)
-  );
-
-  const dateCounts: Record<string, number> = {};
-  for (const dd of deliveryDays) {
-    if (disabledUserIds.has(dd.user_id)) continue;
-    const saladsPerDelivery = saladsMap.get(dd.subscription_id) ?? 1;
-    for (const day of dd.selected_days) {
-      const date = new Date(dd.week_start + "T00:00:00");
-      date.setDate(date.getDate() + day - 1);
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
-      const d = String(date.getDate()).padStart(2, "0");
-      const dateStr = `${y}-${m}-${d}`;
-      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
-    }
-  }
-
-  return dateCounts;
+  return fetchSubscriptionDayCountsCached(periodId);
 }
+
+// Aggregate counts across all users — same answer for everyone, so cache it.
+// Short TTL self-heals after user selections; closures bust the tag directly.
+const fetchSubscriptionDayCountsCached = unstable_cache(
+  async (periodId: string): Promise<Record<string, number>> => {
+    const supabase = createPublicClient();
+
+    const { data: subscriptions } = await supabase
+      .from("subscriptions")
+      .select("id, salads_per_delivery")
+      .eq("period_id", periodId);
+
+    if (!subscriptions?.length) return {};
+
+    const subIds = subscriptions.map((s: any) => s.id);
+    const saladsMap = new Map<string, number>();
+    for (const s of subscriptions) {
+      saladsMap.set(s.id, s.salads_per_delivery ?? 1);
+    }
+
+    const [{ data: disabledProfiles }, { data: deliveryDays }] = await Promise.all([
+      supabase.from("profiles").select("id").eq("status", "disabled"),
+      supabase.from("delivery_days").select("subscription_id, week_start, selected_days, user_id").in("subscription_id", subIds),
+    ]);
+
+    if (!deliveryDays?.length) return {};
+
+    const disabledUserIds = new Set(
+      (disabledProfiles ?? []).map((p: any) => p.id)
+    );
+
+    const dateCounts: Record<string, number> = {};
+    for (const dd of deliveryDays) {
+      if (disabledUserIds.has(dd.user_id)) continue;
+      const saladsPerDelivery = saladsMap.get(dd.subscription_id) ?? 1;
+      for (const day of dd.selected_days) {
+        const date = new Date(dd.week_start + "T00:00:00");
+        date.setDate(date.getDate() + day - 1);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, "0");
+        const d = String(date.getDate()).padStart(2, "0");
+        const dateStr = `${y}-${m}-${d}`;
+        dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
+      }
+    }
+
+    return dateCounts;
+  },
+  ["subscription-day-counts"],
+  { revalidate: 60, tags: ["day-counts"] }
+);
 
 export async function getSubscribersForDate(
   periodId: string,

@@ -32,7 +32,11 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  // Refreshes the session cookie like getUser(), but validates the JWT
+  // locally when the Supabase project uses asymmetric signing keys —
+  // avoiding an Auth server round-trip on every navigation. With symmetric
+  // keys it transparently falls back to a server-side check (same as before).
+  await supabase.auth.getClaims();
 
   return supabaseResponse;
 }

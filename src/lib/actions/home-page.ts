@@ -3,7 +3,6 @@
 import { getCurrentProfile } from "@/lib/actions/auth";
 import {
   getActivePeriod,
-  getMySubscription,
   getMySubscriptions,
 } from "@/lib/actions/subscription";
 import { getMyDeliveryDaysGrouped } from "@/lib/actions/delivery";
@@ -45,6 +44,9 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
   const kstNow = getKSTDate();
   const isWeekday = kstNow.getDay() >= 1 && kstNow.getDay() <= 5;
 
+  // Wave 1 — every query that doesn't depend on another query's result.
+  // Holidays are fetched unscoped here (small table); strip dates always fall
+  // within the rows returned, so the per-year follow-up fetch is unnecessary.
   const [
     profile,
     period,
@@ -56,6 +58,7 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
     cutoff,
     deliveryDaysBySub,
     storeClosures,
+    holidayRows,
   ] = await Promise.all([
     getCurrentProfile(),
     getActivePeriod(),
@@ -67,11 +70,18 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
     getMenuSelectionCutoff(),
     getMyDeliveryDaysGrouped(),
     getStoreClosures(),
+    getHolidays(),
   ]);
 
   const subscription = findCurrentSubscription(allSubscriptions, todayStr);
   const isAdmin = profile?.role === "admin" || profile?.role === "super_admin";
-  const periodSubscription = period ? await getMySubscription(period.id) : null;
+  // Derive from allSubscriptions instead of a dedicated query — same row,
+  // just without an extra round-trip.
+  const periodSubscription = period
+    ? ((allSubscriptions as Subscription[]).find(
+        (sub) => sub.period_id === period.id
+      ) ?? null)
+    : null;
 
   const incompleteClosureCandidates = (
     allSubscriptions as SubscriptionWithPeriod[]
@@ -169,36 +179,39 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
     if (futureDates.length > 0) nextDeliveryDate = futureDates[0];
   }
 
-  let loggedInStripDates: string[] = [];
-  let guestStripDates: string[] = [];
-
   const rawGuestDates = getGuestStripWeekdays(todayStr);
-  const holidayYears = new Set([
-    ...myDeliveryDates.map((d) => new Date(d + "T00:00:00").getFullYear()),
-    ...rawGuestDates.map((d) => new Date(d + "T00:00:00").getFullYear()),
-  ]);
-  const holidayRows =
-    holidayYears.size > 0
-      ? (await Promise.all([...holidayYears].map((y) => getHolidays(y)))).flat()
-      : [];
 
-  loggedInStripDates = excludeBlockedDates(
+  const loggedInStripDates = excludeBlockedDates(
     myDeliveryDates,
     holidayRows,
     storeClosures
   );
 
-  if (!profile) {
-    guestStripDates = excludeBlockedDates(rawGuestDates, holidayRows, storeClosures);
-  }
+  const guestStripDates = profile
+    ? []
+    : excludeBlockedDates(rawGuestDates, holidayRows, storeClosures);
 
   const stripStart = bestSub?.subscription_periods?.delivery_start?.slice(0, 10);
   const stripEnd = bestSub?.subscription_periods?.delivery_end?.slice(0, 10);
 
-  const stripSelections =
+  // Wave 2 — strip selections and strip daily menus, all in parallel.
+  const [stripSelections, stripDailyMenus, guestDailyMenus] = await Promise.all([
     stripStart && stripEnd
-      ? await getMyMenuSelectionsSummary(stripStart, stripEnd)
-      : [];
+      ? getMyMenuSelectionsSummary(stripStart, stripEnd)
+      : Promise.resolve([] as MenuSelection[]),
+    profile && loggedInStripDates.length > 0
+      ? getDailyMenus(
+          loggedInStripDates[0],
+          loggedInStripDates[loggedInStripDates.length - 1]
+        )
+      : Promise.resolve([]),
+    !profile && guestStripDates.length > 0
+      ? getDailyMenus(
+          guestStripDates[0],
+          guestStripDates[guestStripDates.length - 1]
+        )
+      : Promise.resolve([]),
+  ]);
 
   const selectedDatesInPeriod =
     stripSelections.length > 0
@@ -213,11 +226,11 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
           ?.title ?? null
       : null;
 
-  const stripData = await getHomeStripData(
-    !!profile,
+  const stripData = buildHomeStripData(
     loggedInStripDates,
-    guestStripDates,
-    stripSelections
+    stripSelections,
+    stripDailyMenus,
+    guestDailyMenus
   );
 
   return {
@@ -250,25 +263,13 @@ export async function getHomePageShellData(): Promise<HomePageShellData> {
   };
 }
 
-/** Slow path: daily menu rows for the delivery strip preview. */
-export async function getHomeStripData(
-  isLoggedIn: boolean,
+/** Assembles delivery-strip menu maps from already-fetched rows (no queries). */
+function buildHomeStripData(
   loggedInStripDates: string[],
-  guestStripDates: string[],
-  stripSelections: MenuSelection[]
-): Promise<HomeStripData> {
-  const [stripDailyMenus, guestDailyMenus] = await Promise.all([
-    isLoggedIn && loggedInStripDates.length > 0
-      ? getDailyMenus(
-          loggedInStripDates[0],
-          loggedInStripDates[loggedInStripDates.length - 1]
-        )
-      : Promise.resolve([]),
-    !isLoggedIn && guestStripDates.length > 0
-      ? getDailyMenus(guestStripDates[0], guestStripDates[guestStripDates.length - 1])
-      : Promise.resolve([]),
-  ]);
-
+  stripSelections: MenuSelection[],
+  stripDailyMenus: Awaited<ReturnType<typeof getDailyMenus>>,
+  guestDailyMenus: Awaited<ReturnType<typeof getDailyMenus>>
+): HomeStripData {
   let menuDetailByDate: HomeStripData["menuDetailByDate"] = {};
   let availableMenusByDate: HomeStripData["availableMenusByDate"] = {};
 
