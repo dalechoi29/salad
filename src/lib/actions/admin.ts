@@ -15,6 +15,7 @@ import type {
 } from "@/types";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import { getCurrentProfile } from "@/lib/actions/auth";
+import { getSubscriptionPeriodById } from "@/lib/actions/subscription";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const SUPER_ADMIN_ROLES = ["super_admin"];
@@ -289,6 +290,7 @@ export async function saveSubscriptionHoldAdminSettings(params: {
     if (error) return { error: error.message };
   }
 
+  updateTag("settings");
   revalidatePath("/admin/settings");
   revalidatePath("/subscription");
   return { success: true };
@@ -601,14 +603,9 @@ export async function getDashboardStats(
 
   const supabase = await createClient();
 
-  const { count: totalUsers } = await supabase
-    .from("profiles")
-    .select("*", { count: "exact", head: true });
-
-  const { count: approvedUsers } = await supabase
-    .from("profiles")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "approved");
+  // Resolve the period first (served from the cached periods list) so the
+  // selections scan below can be scoped to its delivery window.
+  const period = periodId ? await getSubscriptionPeriodById(periodId) : null;
 
   let subsQuery = supabase.from("subscriptions").select("*", { count: "exact", head: true });
   let paidQuery = supabase.from("subscriptions").select("*", { count: "exact", head: true }).eq("payment_status", "completed");
@@ -618,23 +615,41 @@ export async function getDashboardStats(
     paidQuery = paidQuery.eq("period_id", periodId);
   }
 
-  const { count: activeSubscribers } = await subsQuery;
-  const { count: paidSubscribers } = await paidQuery;
-
-  const { count: totalPickups } = await supabase
-    .from("pickups")
-    .select("*", { count: "exact", head: true })
-    .eq("confirmed", true);
-
-  const { data: disabledProfiles } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("status", "disabled");
-  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
-
-  const { data: selections } = await supabase
+  let selectionsQuery = supabase
     .from("user_menu_selections")
     .select("delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))");
+  if (period?.delivery_start && period.delivery_end) {
+    selectionsQuery = selectionsQuery
+      .gte("delivery_date", period.delivery_start.slice(0, 10))
+      .lte("delivery_date", period.delivery_end.slice(0, 10));
+  }
+
+  // All independent — one parallel wave instead of seven serial round-trips.
+  const [
+    { count: totalUsers },
+    { count: approvedUsers },
+    { count: activeSubscribers },
+    { count: paidSubscribers },
+    { count: totalPickups },
+    { data: disabledProfiles },
+    { data: selections },
+  ] = await Promise.all([
+    supabase.from("profiles").select("*", { count: "exact", head: true }),
+    supabase
+      .from("profiles")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "approved"),
+    subsQuery,
+    paidQuery,
+    supabase
+      .from("pickups")
+      .select("*", { count: "exact", head: true })
+      .eq("confirmed", true),
+    supabase.from("profiles").select("id").eq("status", "disabled"),
+    selectionsQuery,
+  ]);
+
+  const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
 
   const activeSelections = (selections ?? []).filter(
     (s: any) => !disabledUserIds.has(s.user_id)
@@ -749,8 +764,6 @@ export async function getVendorReport(
     (disabledResult.data ?? []).map((p: any) => p.id)
   );
 
-  // Fetch real names for any users appearing in selections, so we can show
-  // "who picked which menu" compactly in the report.
   const userIds = [
     ...new Set(
       (selectionsResult.data ?? [])
@@ -758,23 +771,6 @@ export async function getVendorReport(
         .filter(Boolean)
     ),
   ] as string[];
-  const nameByUserId = new Map<string, string>();
-  if (userIds.length > 0) {
-    const { data: profilesData } = await supabase
-      .from("profiles")
-      .select("id, real_name, nickname, email")
-      .in("id", userIds);
-    for (const p of (profilesData ?? []) as any[]) {
-      nameByUserId.set(
-        p.id,
-        p.real_name || p.nickname || p.email?.split("@")[0] || "알수없음"
-      );
-    }
-  }
-
-  const activeSelections = (selectionsResult.data ?? []).filter(
-    (s: any) => !disabledUserIds.has(s.user_id)
-  );
 
   const subIds = [
     ...new Set(
@@ -795,17 +791,41 @@ export async function getVendorReport(
     } | null;
   };
 
+  // Both follow-ups only depend on wave-1 ids — run them together.
+  const [{ data: profilesData }, { data: subs }] = await Promise.all([
+    userIds.length > 0
+      ? supabase
+          .from("profiles")
+          .select("id, real_name, nickname, email")
+          .in("id", userIds)
+      : Promise.resolve({ data: [] }),
+    subIds.length > 0
+      ? supabase
+          .from("subscriptions")
+          .select(
+            "id, salads_per_delivery, payment_status, subscription_periods(target_month, delivery_start, delivery_end)"
+          )
+          .in("id", subIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  // Real names for users appearing in selections, so we can show
+  // "who picked which menu" compactly in the report.
+  const nameByUserId = new Map<string, string>();
+  for (const p of (profilesData ?? []) as any[]) {
+    nameByUserId.set(
+      p.id,
+      p.real_name || p.nickname || p.email?.split("@")[0] || "알수없음"
+    );
+  }
+
+  const activeSelections = (selectionsResult.data ?? []).filter(
+    (s: any) => !disabledUserIds.has(s.user_id)
+  );
+
   const subById = new Map<string, SubRow>();
-  if (subIds.length > 0) {
-    const { data: subs } = await supabase
-      .from("subscriptions")
-      .select(
-        "id, salads_per_delivery, payment_status, subscription_periods(target_month, delivery_start, delivery_end)"
-      )
-      .in("id", subIds);
-    for (const s of (subs ?? []) as SubRow[]) {
-      subById.set(s.id, s);
-    }
+  for (const s of (subs ?? []) as unknown as SubRow[]) {
+    subById.set(s.id, s);
   }
 
   function targetMonthLabelFromDateStr(dateStr: string): string {
@@ -1065,20 +1085,18 @@ export async function getDeliverySummary(
 ): Promise<DailySummaryItem[]> {
   const supabase = await createClient();
 
-  const { data: disabledProfiles } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("status", "disabled");
+  const [{ data: disabledProfiles }, { data: selections }] = await Promise.all([
+    supabase.from("profiles").select("id").eq("status", "disabled"),
+    supabase
+      .from("user_menu_selections")
+      .select(
+        "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
+      )
+      .gte("delivery_date", startDate)
+      .lte("delivery_date", endDate)
+      .order("delivery_date"),
+  ]);
   const disabledUserIds = new Set((disabledProfiles ?? []).map((p: any) => p.id));
-
-  const { data: selections } = await supabase
-    .from("user_menu_selections")
-    .select(
-      "delivery_date, user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title, image_url))"
-    )
-    .gte("delivery_date", startDate)
-    .lte("delivery_date", endDate)
-    .order("delivery_date");
 
   const activeSelections = (selections ?? []).filter(
     (s: any) => !disabledUserIds.has(s.user_id)
@@ -1192,34 +1210,43 @@ export async function getSubscribersForDate(
 ): Promise<{ userId: string; realName: string; saladsPerDelivery: number }[]> {
   const supabase = await createClient();
 
-  const { data: subscriptions } = await supabase
-    .from("subscriptions")
-    .select("id, user_id, salads_per_delivery")
-    .eq("period_id", periodId);
+  // Wave 1 — subscriptions and disabled profiles are independent.
+  const [{ data: subscriptions }, { data: disabledProfiles }] =
+    await Promise.all([
+      supabase
+        .from("subscriptions")
+        .select("id, user_id, salads_per_delivery")
+        .eq("period_id", periodId),
+      supabase.from("profiles").select("id").eq("status", "disabled"),
+    ]);
 
   if (!subscriptions?.length) return [];
 
-  const { data: disabledProfiles } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("status", "disabled");
   const disabledUserIds = new Set(
     (disabledProfiles ?? []).map((p: any) => p.id)
   );
 
   const subIds = subscriptions.map((s: any) => s.id);
+  const periodUserIds = [
+    ...new Set(subscriptions.map((s: any) => s.user_id as string)),
+  ];
   const userSaladsMap = new Map(
     subscriptions.map((s: any) => [s.user_id, s.salads_per_delivery as number])
   );
 
-  const { data: deliveryDays } = await supabase
-    .from("delivery_days")
-    .select("subscription_id, user_id, week_start, selected_days")
-    .in("subscription_id", subIds);
+  // Wave 2 — fetch delivery days and names for all period users together,
+  // then narrow to the users actually scheduled for the target date in JS.
+  const [{ data: deliveryDays }, { data: profiles }] = await Promise.all([
+    supabase
+      .from("delivery_days")
+      .select("subscription_id, user_id, week_start, selected_days")
+      .in("subscription_id", subIds),
+    supabase.from("profiles").select("id, real_name").in("id", periodUserIds),
+  ]);
 
   if (!deliveryDays?.length) return [];
 
-  const matchedUserIds: string[] = [];
+  const matchedUserIds = new Set<string>();
   for (const dd of deliveryDays) {
     if (disabledUserIds.has(dd.user_id)) continue;
     for (const day of dd.selected_days) {
@@ -1229,24 +1256,20 @@ export async function getSubscribersForDate(
       const m = String(date.getMonth() + 1).padStart(2, "0");
       const d = String(date.getDate()).padStart(2, "0");
       if (`${y}-${m}-${d}` === targetDate) {
-        matchedUserIds.push(dd.user_id);
+        matchedUserIds.add(dd.user_id);
       }
     }
   }
 
-  if (matchedUserIds.length === 0) return [];
+  if (matchedUserIds.size === 0) return [];
 
-  const uniqueIds = [...new Set(matchedUserIds)];
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("id, real_name")
-    .in("id", uniqueIds);
-
-  return (profiles ?? []).map((p: any) => ({
-    userId: p.id,
-    realName: p.real_name || "이름 없음",
-    saladsPerDelivery: userSaladsMap.get(p.id) ?? 1,
-  }));
+  return (profiles ?? [])
+    .filter((p: any) => matchedUserIds.has(p.id))
+    .map((p: any) => ({
+      userId: p.id,
+      realName: p.real_name || "이름 없음",
+      saladsPerDelivery: userSaladsMap.get(p.id) ?? 1,
+    }));
 }
 
 // ─── Date Delivery Details (inline drill-down for admin status page) ────
@@ -1292,27 +1315,55 @@ export async function getDateDeliveryDetails(
 
   const admin = createAdminClient();
 
-  const { data: subs } = await admin
-    .from("subscriptions")
-    .select("id, user_id, salads_per_delivery")
-    .eq("period_id", periodId);
+  // Wave 1 — period subscriptions, disabled profiles, and the day's main
+  // menu assignments are mutually independent.
+  const [{ data: subs }, { data: disabled }, assignmentsResult] =
+    await Promise.all([
+      admin
+        .from("subscriptions")
+        .select("id, user_id, salads_per_delivery")
+        .eq("period_id", periodId),
+      admin.from("profiles").select("id").eq("status", "disabled"),
+      admin
+        .from("daily_menu_assignments")
+        .select("menu_id, slot_type, menu:menus(id, title)")
+        .eq("slot_type", "main")
+        .eq("delivery_date", date),
+    ]);
   if (!subs?.length) return empty;
 
   const subIds = subs.map((s: any) => s.id as string);
+  const periodUserIds = [
+    ...new Set(subs.map((s: any) => s.user_id as string)),
+  ];
   const userSaladsMap = new Map<string, number>();
   for (const s of subs as any[]) {
     userSaladsMap.set(s.user_id as string, (s.salads_per_delivery as number | null) ?? 1);
   }
 
-  const [{ data: disabled }, { data: deliveryRows }] = await Promise.all([
-    admin.from("profiles").select("id").eq("status", "disabled"),
-    admin
-      .from("delivery_days")
-      .select("subscription_id, user_id, week_start, selected_days")
-      .in("subscription_id", subIds),
-  ]);
-
   const disabledIds = new Set((disabled ?? []).map((p: any) => p.id as string));
+
+  // Wave 2 — everything keyed on the period's subscription/user ids. The
+  // selections and profiles are fetched for all period users and narrowed
+  // to the exact date's roster in JS, which keeps this a single wave.
+  const [{ data: deliveryRows }, selectionsResult, { data: profiles }] =
+    await Promise.all([
+      admin
+        .from("delivery_days")
+        .select("subscription_id, user_id, week_start, selected_days")
+        .in("subscription_id", subIds),
+      admin
+        .from("user_menu_selections")
+        .select(
+          "user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
+        )
+        .eq("delivery_date", date)
+        .in("user_id", periodUserIds),
+      admin
+        .from("profiles")
+        .select("id, real_name, nickname, email")
+        .in("id", periodUserIds),
+    ]);
 
   // Figure out exactly which users are scheduled for this specific date.
   const usersForDate = new Set<string>();
@@ -1335,11 +1386,6 @@ export async function getDateDeliveryDetails(
 
   const userIds = [...usersForDate];
 
-  const { data: profiles } = await admin
-    .from("profiles")
-    .select("id, real_name, nickname, email")
-    .in("id", userIds);
-
   const nameByUserId = new Map<string, string>();
   for (const p of (profiles ?? []) as any[]) {
     nameByUserId.set(
@@ -1356,22 +1402,6 @@ export async function getDateDeliveryDetails(
     }))
     .sort((a, b) => a.realName.localeCompare(b.realName, "ko"));
 
-  // Fetch explicit menu picks and the admin-planned main menus for this day.
-  const [selectionsResult, assignmentsResult] = await Promise.all([
-    admin
-      .from("user_menu_selections")
-      .select(
-        "user_id, quantity, daily_menu_assignment:daily_menu_assignments(menu:menus(id, title))"
-      )
-      .eq("delivery_date", date)
-      .in("user_id", userIds),
-    admin
-      .from("daily_menu_assignments")
-      .select("menu_id, slot_type, menu:menus(id, title)")
-      .eq("slot_type", "main")
-      .eq("delivery_date", date),
-  ]);
-
   type MenuAggregate = {
     menuTitle: string;
     count: number;
@@ -1381,6 +1411,9 @@ export async function getDateDeliveryDetails(
 
   let selectedSalads = 0;
   for (const sel of (selectionsResult.data ?? []) as any[]) {
+    // Selections were fetched for all period users in one wave; narrow to
+    // the users actually scheduled for this date.
+    if (!usersForDate.has(sel.user_id as string)) continue;
     const qty = (sel.quantity as number | null) ?? 1;
     const menu = sel.daily_menu_assignment?.menu;
     if (!menu) continue;
@@ -1834,6 +1867,12 @@ export async function getTodaySaladSummary(): Promise<
 
   const supabase = await createClient();
 
+  // A delivery-day row can only cover today if its week_start falls within
+  // the last 7 days (day offsets are 0–6) — avoids scanning the whole table.
+  const weekStartFloor = new Date(todayStr + "T00:00:00");
+  weekStartFloor.setDate(weekStartFloor.getDate() - 6);
+  const weekStartFloorStr = formatDateISO(weekStartFloor);
+
   const [disabledResult, selectionsResult, deliveryDaysResult, assignmentsResult] =
     await Promise.all([
       supabase.from("profiles").select("id").eq("status", "disabled"),
@@ -1845,7 +1884,9 @@ export async function getTodaySaladSummary(): Promise<
         .eq("delivery_date", todayStr),
       supabase
         .from("delivery_days")
-        .select("user_id, week_start, selected_days"),
+        .select("user_id, week_start, selected_days")
+        .gte("week_start", weekStartFloorStr)
+        .lte("week_start", todayStr),
       supabase
         .from("daily_menu_assignments")
         .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
@@ -2121,32 +2162,51 @@ export async function getAdminUserDetail(
     "@/lib/delivery-days"
   );
 
+  // Two batched queries instead of 2 round-trips per subscription.
+  const subIds = (subs ?? []).map((sub: { id: string }) => sub.id);
+  const [{ data: allDdRows }, { data: allSkipRows }] = subIds.length
+    ? await Promise.all([
+        supabase
+          .from("delivery_days")
+          .select("subscription_id, week_start, selected_days")
+          .in("subscription_id", subIds),
+        supabase
+          .from("skipped_delivery_days")
+          .select("subscription_id, delivery_date, skip_reason")
+          .in("subscription_id", subIds),
+      ])
+    : [{ data: [] }, { data: [] }];
+
+  const ddBySub = new Map<string, { week_start: string; selected_days: number[] | null }[]>();
+  for (const row of (allDdRows ?? []) as any[]) {
+    const list = ddBySub.get(row.subscription_id) ?? [];
+    list.push(row);
+    ddBySub.set(row.subscription_id, list);
+  }
+  const skipBySub = new Map<string, { delivery_date: string; skip_reason: string | null }[]>();
+  for (const row of (allSkipRows ?? []) as any[]) {
+    const list = skipBySub.get(row.subscription_id) ?? [];
+    list.push(row);
+    skipBySub.set(row.subscription_id, list);
+  }
+
   const subscriptionEntries: AdminUserSubscriptionEntry[] = [];
 
   for (const sub of subs ?? []) {
-    // Fetch delivery days
-    const { data: ddRows } = await supabase
-      .from("delivery_days")
-      .select("week_start, selected_days")
-      .eq("subscription_id", sub.id);
-
-    const deliveryDateStrings = expandDeliveryDaysToDateStrings(ddRows ?? []);
-
-    // Fetch skipped dates (split by reason)
-    const { data: skipRows } = await supabase
-      .from("skipped_delivery_days")
-      .select("delivery_date, skip_reason")
-      .eq("subscription_id", sub.id);
+    const deliveryDateStrings = expandDeliveryDaysToDateStrings(
+      ddBySub.get(sub.id) ?? []
+    );
 
     // Vacation skips are removed from delivery_days at skip time, and restored on unskip.
     // Reschedule actions maintain delivery_days and clean up skipped_delivery_days for
     // replacement dates, so simple reason-based filtering is safe here.
-    const skippedDates = (skipRows ?? [])
-      .filter((r: any) => r.skip_reason !== "reschedule")
-      .map((r: any) => r.delivery_date as string);
-    const rescheduledDates = (skipRows ?? [])
-      .filter((r: any) => r.skip_reason === "reschedule")
-      .map((r: any) => r.delivery_date as string);
+    const skipRows = skipBySub.get(sub.id) ?? [];
+    const skippedDates = skipRows
+      .filter((r) => r.skip_reason !== "reschedule")
+      .map((r) => r.delivery_date);
+    const rescheduledDates = skipRows
+      .filter((r) => r.skip_reason === "reschedule")
+      .map((r) => r.delivery_date);
 
     const period = sub.subscription_periods as any;
 

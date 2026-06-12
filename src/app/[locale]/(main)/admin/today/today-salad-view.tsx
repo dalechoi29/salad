@@ -18,33 +18,43 @@ import {
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import {
-  getTodaySaladSummary,
-  getDailySaladStatus,
   updateDailySaladStatus,
   getDailySaladStatusHistory,
-  getCompanyUsers,
 } from "@/lib/actions/admin";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { formatDateISO, getKSTDate, formatDateShort } from "@/lib/utils";
 import type { DailySaladStatus } from "@/types";
 
-export function TodaySaladView() {
+interface TodaySaladViewProps {
+  initialSummary: { menuTitle: string; count: number }[];
+  initialStatus: DailySaladStatus | null;
+  initialCompanyUsers: { id: string; realName: string }[];
+}
+
+export function TodaySaladView({
+  initialSummary,
+  initialStatus,
+  initialCompanyUsers,
+}: TodaySaladViewProps) {
   const todayStr = formatDateISO(getKSTDate());
-  const [summary, setSummary] = useState<{ menuTitle: string; count: number }[]>([]);
-  const [status, setStatus] = useState<DailySaladStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const summary = initialSummary;
+  const [status, setStatus] = useState<DailySaladStatus | null>(initialStatus);
   const [isSaving, setIsSaving] = useState(false);
 
-  const [isChecked, setIsChecked] = useState(false);
-  const [location, setLocation] = useState("");
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [isChecked, setIsChecked] = useState(initialStatus?.is_checked ?? false);
+  const [location, setLocation] = useState(initialStatus?.location ?? "");
+  const [photoUrl, setPhotoUrl] = useState<string | null>(
+    initialStatus?.photo_url ?? null
+  );
   const [isUploading, setIsUploading] = useState(false);
 
-  const [helpers, setHelpers] = useState<string[]>([]);
+  const [helpers, setHelpers] = useState<string[]>(
+    initialStatus?.helpers ? initialStatus.helpers.split(", ") : []
+  );
   const [helperInput, setHelperInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [companyUsers, setCompanyUsers] = useState<{ id: string; realName: string }[]>([]);
+  const companyUsers = initialCompanyUsers;
 
   const now = getKSTDate();
   const [histYear, setHistYear] = useState(now.getFullYear());
@@ -63,28 +73,6 @@ export function TodaySaladView() {
       )
       .slice(0, 5);
   }, [helperInput, companyUsers, helpers]);
-
-  useEffect(() => {
-    async function load() {
-      setIsLoading(true);
-      const [summaryData, statusData, users] = await Promise.all([
-        getTodaySaladSummary(),
-        getDailySaladStatus(todayStr),
-        getCompanyUsers(),
-      ]);
-      setSummary(summaryData);
-      setStatus(statusData);
-      setCompanyUsers(users);
-      if (statusData) {
-        setIsChecked(statusData.is_checked);
-        setLocation(statusData.location ?? "");
-        setPhotoUrl(statusData.photo_url);
-        setHelpers(statusData.helpers ? statusData.helpers.split(", ") : []);
-      }
-      setIsLoading(false);
-    }
-    load();
-  }, [todayStr]);
 
   useEffect(() => {
     async function loadHistory() {
@@ -203,13 +191,7 @@ export function TodaySaladView() {
         <span className="text-sm text-muted-foreground">{todayStr}</span>
       </div>
 
-      {isLoading ? (
-        <div className="space-y-4">
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-32 w-full" />
-        </div>
-      ) : (
-        <>
+      <>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
@@ -394,8 +376,7 @@ export function TodaySaladView() {
               </Button>
             </CardContent>
           </Card>
-        </>
-      )}
+      </>
 
       <Card>
         <CardHeader>

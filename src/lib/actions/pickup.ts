@@ -1,71 +1,58 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { createClient, getAuthUser, getAuthUserId } from "@/lib/supabase/server";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
 import type { ActionResult, Pickup } from "@/types";
 
+// Neither mutation below revalidates any path: the pickup page refreshes
+// its own list client-side after a successful action, and the home page is
+// fully dynamic (re-fetched on navigation). Revalidating here would force
+// an inline re-render of /pickup in every action response, which is what
+// made the 챙겼어요 button feel slow.
+
 export async function confirmPickup(pickupDate: string, menuId?: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  const { data: existing } = await supabase
-    .from("pickups")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("pickup_date", pickupDate)
-    .single();
-
-  const updateData: Record<string, unknown> = {
+  const row: Record<string, unknown> = {
+    user_id: userId,
+    pickup_date: pickupDate,
     confirmed: true,
     confirmed_at: new Date().toISOString(),
   };
-  if (menuId) updateData.menu_id = menuId;
+  if (menuId) row.menu_id = menuId;
 
-  if (existing) {
-    const { error } = await supabase
-      .from("pickups")
-      .update(updateData)
-      .eq("id", existing.id);
+  // Upsert on the (user_id, pickup_date) unique constraint replaces the
+  // old select-then-insert/update pair. The streak recomputation reads
+  // other days' pickups, so it can fetch in parallel with this write; the
+  // just-changed date is applied locally inside updateStreak.
+  const [{ error }] = await Promise.all([
+    supabase.from("pickups").upsert(row, { onConflict: "user_id,pickup_date" }),
+    updateStreak(userId, { date: pickupDate, confirmed: true }),
+  ]);
 
-    if (error) return { error: error.message };
-  } else {
-    const { error } = await supabase.from("pickups").insert({
-      user_id: user.id,
-      pickup_date: pickupDate,
-      ...updateData,
-    });
-
-    if (error) return { error: error.message };
-  }
-
-  await updateStreak(user.id);
-
-  revalidatePath("/pickup");
-  revalidatePath("/");
+  if (error) return { error: error.message };
   return { success: true };
 }
 
 export async function undoPickup(pickupDate: string): Promise<ActionResult> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  const { error } = await supabase
-    .from("pickups")
-    .update({ confirmed: false, confirmed_at: null })
-    .eq("user_id", user.id)
-    .eq("pickup_date", pickupDate);
+  const [{ error }] = await Promise.all([
+    supabase
+      .from("pickups")
+      .update({ confirmed: false, confirmed_at: null })
+      .eq("user_id", userId)
+      .eq("pickup_date", pickupDate),
+    updateStreak(userId, { date: pickupDate, confirmed: false }),
+  ]);
 
   if (error) return { error: error.message };
-
-  await updateStreak(user.id);
-
-  revalidatePath("/pickup");
-  revalidatePath("/");
   return { success: true };
 }
 
@@ -104,7 +91,18 @@ export async function getPickupStreak(): Promise<number> {
   return profile?.pickup_streak ?? 0;
 }
 
-async function updateStreak(userId: string): Promise<void> {
+/**
+ * Recomputes the user's pickup streak.
+ *
+ * `change` describes the pickup mutation happening in the same request, so
+ * the confirmed-dates query can run in parallel with that write instead of
+ * after it — the changed date is applied to the fetched set locally, which
+ * makes the result deterministic regardless of write/read ordering.
+ */
+async function updateStreak(
+  userId: string,
+  change: { date: string; confirmed: boolean }
+): Promise<void> {
   const supabase = await createClient();
 
   const { data: pickups } = await supabase
@@ -115,7 +113,13 @@ async function updateStreak(userId: string): Promise<void> {
     .order("pickup_date", { ascending: false })
     .limit(60);
 
-  if (!pickups || pickups.length === 0) {
+  const confirmedDates = new Set(
+    (pickups ?? []).map((p: { pickup_date: string }) => p.pickup_date)
+  );
+  if (change.confirmed) confirmedDates.add(change.date);
+  else confirmedDates.delete(change.date);
+
+  if (confirmedDates.size === 0) {
     await supabase
       .from("profiles")
       .update({ pickup_streak: 0 })
@@ -126,8 +130,6 @@ async function updateStreak(userId: string): Promise<void> {
   let streak = 0;
   const today = getKSTDate();
   const todayStr = formatDateISO(today);
-
-  const confirmedDates = new Set(pickups.map((p: { pickup_date: string }) => p.pickup_date));
 
   const cursor = new Date(today);
   // If today isn't confirmed yet, start from yesterday

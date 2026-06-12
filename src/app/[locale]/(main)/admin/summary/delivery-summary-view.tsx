@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +18,24 @@ import { getDeliverySummary } from "@/lib/actions/admin";
 import { formatDateShort, getTodayStr, getMonthRange, formatMonthLabel } from "@/lib/utils";
 import type { DailySummaryItem } from "@/lib/actions/admin";
 
-export function DeliverySummaryView() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [summary, setSummary] = useState<DailySummaryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+interface DeliverySummaryViewProps {
+  initialYear: number;
+  initialMonth: number;
+  initialSummary: DailySummaryItem[];
+}
+
+export function DeliverySummaryView({
+  initialYear,
+  initialMonth,
+  initialSummary,
+}: DeliverySummaryViewProps) {
+  const [year, setYear] = useState(initialYear);
+  const [month, setMonth] = useState(initialMonth);
+  const [summary, setSummary] = useState<DailySummaryItem[]>(initialSummary);
+  const [loading, setLoading] = useState(false);
+  // SSR provided the initial month; only refetch when the viewed month
+  // differs from the one whose data is currently loaded.
+  const loadedMonthRef = useRef(`${initialYear}-${initialMonth}`);
   const todayStr = getTodayStr();
 
   const loadSummary = useCallback(async () => {
@@ -38,8 +50,11 @@ export function DeliverySummaryView() {
   }, [year, month]);
 
   useEffect(() => {
+    const key = `${year}-${month}`;
+    if (loadedMonthRef.current === key) return;
+    loadedMonthRef.current = key;
     loadSummary();
-  }, [loadSummary]);
+  }, [loadSummary, year, month]);
 
   function goToPrevMonth() {
     if (month === 1) {

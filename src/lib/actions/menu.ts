@@ -5,6 +5,7 @@ import {
   createAdminClient,
   createPublicClient,
   getAuthUser,
+  getAuthUserId,
 } from "@/lib/supabase/server";
 import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type { ActionResult, Menu, DailyMenu, MenuSelection, MenuFavorite } from "@/types";
@@ -388,77 +389,77 @@ export async function updateMenuQuantity(
   replaceForDate = false
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  if (await userHasActiveHoldCoveringDeliveryDate(supabase, user.id, deliveryDate)) {
+  if (await userHasActiveHoldCoveringDeliveryDate(supabase, userId, deliveryDate)) {
     return { error: "홀드 기간에는 메뉴를 변경할 수 없어요." };
   }
 
-  // A user picking / updating / clearing a menu for a date changes the
-  // vendor report totals and the admin subscription-status drill-down for
-  // that date. Invalidate both after any successful mutation below.
-  // Menu page keeps selections in client state — skip /menu revalidation to avoid
-  // Suspense refetch and week-index reset while the user is selecting.
-  const revalidateRelated = () => {
-    revalidatePath("/admin/subscription-status");
-    revalidatePath("/admin/reports");
-  };
+  // No revalidation here on purpose: the menu page keeps selections in
+  // client state, and the admin pages that show these numbers
+  // (subscription-status, reports) are fully dynamic — they re-fetch on
+  // every request. Calling revalidatePath inside this action would force
+  // an expensive inline re-render of /menu in every action response.
 
   if (quantity <= 0) {
     const { error } = await supabase
       .from("user_menu_selections")
       .delete()
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("daily_menu_id", dailyMenuId);
 
     if (error) return { error: error.message };
-    revalidateRelated();
     return { success: true };
   }
 
-  if (replaceForDate) {
-    await supabase
-      .from("user_menu_selections")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("delivery_date", deliveryDate)
-      .neq("daily_menu_id", dailyMenuId);
-  }
-
-  const { data: existing } = await supabase
+  // Upsert on the (user_id, daily_menu_id) unique constraint replaces the
+  // old select-then-insert/update pair with a single round trip. The
+  // replace-for-date cleanup excludes this daily_menu_id, so it can run in
+  // parallel with the upsert without racing it.
+  const upsertPromise = supabase
     .from("user_menu_selections")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("daily_menu_id", dailyMenuId)
-    .single();
-
-  if (existing) {
-    const { error } = await supabase
-      .from("user_menu_selections")
-      .update({ quantity })
-      .eq("id", existing.id);
-
-    if (error) return { error: error.message };
-  } else {
-    const { error } = await supabase
-      .from("user_menu_selections")
-      .insert({
-        user_id: user.id,
+    .upsert(
+      {
+        user_id: userId,
         daily_menu_id: dailyMenuId,
         delivery_date: deliveryDate,
         quantity,
-      });
+      },
+      { onConflict: "user_id,daily_menu_id" }
+    );
 
-    if (error) return { error: error.message };
-  }
+  const replacePromise = replaceForDate
+    ? supabase
+        .from("user_menu_selections")
+        .delete()
+        .eq("user_id", userId)
+        .eq("delivery_date", deliveryDate)
+        .neq("daily_menu_id", dailyMenuId)
+    : Promise.resolve({ error: null });
 
-  revalidateRelated();
+  const [{ error }] = await Promise.all([upsertPromise, replacePromise]);
+
+  if (error) return { error: error.message };
   return { success: true };
 }
 
 // ─── Menu Favorites ─────────────────────────────────────────
+
+/** Count-only variant for the /my dashboard badge (avoids the full join). */
+export async function getMyFavoritesCount(): Promise<number> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return 0;
+
+  const { count } = await supabase
+    .from("menu_favorites")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  return count ?? 0;
+}
 
 export async function getMyFavorites(): Promise<MenuFavorite[]> {
   const supabase = await createClient();
@@ -491,14 +492,18 @@ export async function getMyFavoriteIds(): Promise<string[]> {
 
 export async function toggleFavorite(menuId: string): Promise<ActionResult & { favorited?: boolean }> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
+  // No revalidation: every caller (menu list, menu detail, favorites list)
+  // tracks favorite state client-side, and /menu fetches favorites fresh on
+  // each request anyway. Revalidating here would re-render the current page
+  // inline and slow the toggle down.
   const { data: existing } = await supabase
     .from("menu_favorites")
     .select("id")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("menu_id", menuId)
     .single();
 
@@ -509,15 +514,13 @@ export async function toggleFavorite(menuId: string): Promise<ActionResult & { f
       .eq("id", existing.id);
 
     if (error) return { error: error.message };
-    revalidatePath("/menu");
     return { success: true, favorited: false };
   } else {
     const { error } = await supabase
       .from("menu_favorites")
-      .insert({ user_id: user.id, menu_id: menuId });
+      .insert({ user_id: userId, menu_id: menuId });
 
     if (error) return { error: error.message };
-    revalidatePath("/menu");
     return { success: true, favorited: true };
   }
 }

@@ -39,34 +39,28 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { updateNickname, logout, changePassword } from "@/lib/actions/auth";
 import { SubscriptionCard } from "./my-list-items";
-import type { Profile, SubscriptionPeriod, MenuFavorite, Review, Post } from "@/types";
+import type { Profile } from "@/types";
 import type { SubscriptionWithDetails } from "./page";
 
 interface MyPageContentProps {
   profile: Profile | null;
-  period: SubscriptionPeriod | null;
   subscriptions: SubscriptionWithDetails[];
-  initialFavorites: MenuFavorite[];
-  initialReviews: Review[];
+  favoritesCount: number;
+  reviewsCount: number;
   streak: number;
-  initialPosts: Post[];
+  postsCount: number;
 }
 
 export function MyPageContent({
   profile,
-  period,
   subscriptions,
-  initialFavorites,
-  initialReviews,
+  favoritesCount,
+  reviewsCount,
   streak,
-  initialPosts,
+  postsCount,
 }: MyPageContentProps) {
   const t = useTranslations("myPage");
   const router = useRouter();
-
-  const favorites = initialFavorites;
-  const reviews = initialReviews;
-  const posts = initialPosts;
   const [nicknameDialog, setNicknameDialog] = useState(false);
   const [newNickname, setNewNickname] = useState(profile?.nickname ?? "");
   const [isSavingNickname, setIsSavingNickname] = useState(false);
@@ -217,8 +211,8 @@ export function MyPageContent({
             <Heart className="h-5 w-5 text-foreground/70" />
           </div>
           <span className="flex-1 text-base font-medium">{t("favoriteMenus")}</span>
-          {favorites.length > 0 && (
-            <Badge variant="secondary" className="mr-1">{favorites.length}</Badge>
+          {favoritesCount > 0 && (
+            <Badge variant="secondary" className="mr-1">{favoritesCount}</Badge>
           )}
           <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
         </Link>
@@ -232,8 +226,8 @@ export function MyPageContent({
             <Star className="h-5 w-5 text-foreground/70" />
           </div>
           <span className="flex-1 text-base font-medium">{t("myReviews")}</span>
-          {reviews.length > 0 && (
-            <Badge variant="secondary" className="mr-1">{reviews.length}</Badge>
+          {reviewsCount > 0 && (
+            <Badge variant="secondary" className="mr-1">{reviewsCount}</Badge>
           )}
           <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
         </Link>
@@ -247,8 +241,8 @@ export function MyPageContent({
             <MessageSquare className="h-5 w-5 text-foreground/70" />
           </div>
           <span className="flex-1 text-base font-medium">{t("myPosts")}</span>
-          {posts.length > 0 && (
-            <Badge variant="secondary" className="mr-1">{posts.length}</Badge>
+          {postsCount > 0 && (
+            <Badge variant="secondary" className="mr-1">{postsCount}</Badge>
           )}
           <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
         </Link>

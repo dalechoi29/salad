@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Image from "next/image";
 import {
   Card,
   CardContent,
@@ -893,9 +894,12 @@ export function FavoriteItem({
       <div className="flex items-center gap-3 px-4 py-3">
         <Link href={`/menu/${menu.id}`} className="flex-shrink-0">
           {menu.image_url ? (
-            <img
+            <Image
               src={menu.image_url}
               alt={menu.title}
+              width={40}
+              height={40}
+              sizes="40px"
               className="h-10 w-10 rounded-md object-cover"
             />
           ) : (
@@ -941,9 +945,12 @@ export function ReviewItem({
         <div className="flex items-start gap-3">
           {menu?.image_url ? (
             <Link href={`/menu/${menu.id}`} className="flex-shrink-0">
-              <img
+              <Image
                 src={menu.image_url}
                 alt={menu.title ?? ""}
+                width={48}
+                height={48}
+                sizes="48px"
                 className="h-12 w-12 rounded-md object-cover"
               />
             </Link>

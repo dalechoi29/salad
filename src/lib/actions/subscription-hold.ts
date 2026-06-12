@@ -1,7 +1,11 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import {
+  createClient,
+  createPublicClient,
+  getAuthUser,
+} from "@/lib/supabase/server";
+import { revalidatePath, unstable_cache } from "next/cache";
 import {
   HOLD_DURATION_OPTIONS,
   applyHoldShiftToSortedDates,
@@ -66,6 +70,29 @@ function validateWeeklySelectionsFrequency(
   return undefined;
 }
 
+// Hold settings are global admin config; cache them across requests like the
+// menu cutoff. Mutations bust the shared "settings" tag.
+const fetchHoldSettingsCached = unstable_cache(
+  async (): Promise<Record<string, string>> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("admin_settings")
+      .select("key, value")
+      .in("key", [
+        "subscription_hold_master_enabled",
+        "subscription_hold_allowed_duration_kinds",
+      ]);
+
+    const map: Record<string, string> = {};
+    for (const row of data ?? []) {
+      map[(row as { key: string }).key] = (row as { value: string }).value;
+    }
+    return map;
+  },
+  ["subscription-hold-settings"],
+  { revalidate: 600, tags: ["settings"] }
+);
+
 async function fetchHoldFeatureFlags(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string
@@ -74,25 +101,14 @@ async function fetchHoldFeatureFlags(
   userEligible: boolean;
   allowedKinds: SubscriptionHoldDurationKind[];
 }> {
-  const [profRes, settingsRes] = await Promise.all([
+  const [profRes, map] = await Promise.all([
     supabase
       .from("profiles")
       .select("subscription_hold_eligible")
       .eq("id", userId)
       .maybeSingle(),
-    supabase
-      .from("admin_settings")
-      .select("key, value")
-      .in("key", [
-        "subscription_hold_master_enabled",
-        "subscription_hold_allowed_duration_kinds",
-      ]),
+    fetchHoldSettingsCached(),
   ]);
-
-  const map: Record<string, string> = {};
-  for (const row of settingsRes.data ?? []) {
-    map[(row as { key: string }).key] = (row as { value: string }).value;
-  }
 
   const prof = profRes.data as
     | { subscription_hold_eligible?: boolean | null }

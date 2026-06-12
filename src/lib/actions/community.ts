@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { createClient, getAuthUser, getAuthUserId } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Post, Comment, Vote } from "@/types";
 
@@ -126,6 +126,20 @@ export async function deletePost(postId: string): Promise<ActionResult> {
   return { success: true };
 }
 
+/** Count-only variant for the /my dashboard badge (avoids the full join). */
+export async function getMyPostsCount(): Promise<number> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return 0;
+
+  const { count } = await supabase
+    .from("posts")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  return count ?? 0;
+}
+
 export async function getMyPosts(): Promise<Post[]> {
   const supabase = await createClient();
   const user = await getAuthUser();
@@ -224,14 +238,14 @@ export async function vote(
   value: 1 | -1
 ): Promise<ActionResult & { newVoteCount?: number }> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
   const { data: existing } = await supabase
     .from("votes")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("post_id", postId)
     .single();
 
@@ -255,18 +269,19 @@ export async function vote(
     // New vote
     const { error } = await supabase
       .from("votes")
-      .insert({ user_id: user.id, post_id: postId, value });
+      .insert({ user_id: userId, post_id: postId, value });
     if (error) return { error: error.message };
   }
 
-  // Fetch updated vote count
+  // Fetch updated vote count (maintained by a DB trigger on votes).
+  // No revalidation: the community views apply newVoteCount to their own
+  // state, and both routes are dynamic — revalidating here would re-render
+  // the current page inline and make every like feel slow.
   const { data: post } = await supabase
     .from("posts")
     .select("vote_count")
     .eq("id", postId)
     .single();
 
-  revalidatePath("/community");
-  revalidatePath(`/community/${postId}`);
   return { success: true, newVoteCount: (post as any)?.vote_count ?? 0 };
 }

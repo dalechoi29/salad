@@ -56,6 +56,26 @@ export const getAuthUser = cache(async () => {
 });
 
 /**
+ * Request-scoped cached auth user *id* lookup based on `getClaims()`.
+ *
+ * Unlike `getAuthUser()` (which always round-trips to the Supabase Auth
+ * server), this validates the session JWT locally when the project has
+ * signing keys enabled — making it the cheap choice for hot mutation paths
+ * that only need the caller's id. Middleware has already refreshed the
+ * session for the request, so the token is current.
+ */
+export const getAuthUserId = cache(async (): Promise<string | null> => {
+  const supabase = await createClient();
+  if (typeof supabase.auth.getClaims !== "function") {
+    // Mock client (Supabase not configured) — mirror getAuthUser behavior.
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  }
+  const { data } = await supabase.auth.getClaims();
+  return data?.claims?.sub ?? null;
+});
+
+/**
  * Cookie-free anon client for user-independent reads (holidays, menus,
  * periods, settings). Safe to use inside `unstable_cache`, which forbids
  * accessing cookies. All target tables are anon-readable via RLS.

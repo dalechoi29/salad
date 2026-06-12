@@ -96,6 +96,13 @@ interface Props {
    * to manually switch tabs. URL deep-links (`?date=`) still take priority.
    */
   defaultTabIndex?: number;
+  /**
+   * Server-prefetched drill-down details for `initialDetailsDate`. When the
+   * calendar's own resolved seed date matches, the panel renders with this
+   * data immediately instead of fetching again after mount.
+   */
+  initialDetailsDate?: string | null;
+  initialDetails?: DateDeliveryDetails | null;
 }
 
 const DAY_LABELS = ["월", "화", "수", "목", "금"];
@@ -242,6 +249,8 @@ function MonthCalendar({
   showDateDetailPanel = false,
   initialSelectedDate = null,
   autoOpenFirstDataDate = false,
+  initialDetailsDate = null,
+  initialDetails = null,
 }: {
   period: SubscriptionPeriod;
   counts: Record<string, number>;
@@ -265,6 +274,13 @@ function MonthCalendar({
    * needing to click into a day first.
    */
   autoOpenFirstDataDate?: boolean;
+  /**
+   * Server-prefetched details for `initialDetailsDate`. Consumed only when
+   * the locally resolved seed date matches; otherwise the mount fetch runs
+   * as before.
+   */
+  initialDetailsDate?: string | null;
+  initialDetails?: DateDeliveryDetails | null;
 }) {
   const router = useRouter();
 
@@ -336,14 +352,23 @@ function MonthCalendar({
   const [selectedDate, setSelectedDate] = useState<string | null>(
     seedSelectedDate
   );
-  // Start in the loading state when we have any seed, so the detail card
-  // shows a skeleton on first paint instead of briefly flashing the
-  // empty-state message before the mount fetch completes.
-  const [detailLoading, setDetailLoading] = useState(!!seedSelectedDate);
-  const [details, setDetails] = useState<DateDeliveryDetails>({
-    subscribers: [],
-    menuBreakdown: [],
-  });
+  // When the server already prefetched details for exactly this seed date,
+  // hydrate the panel with data on first paint and skip the mount fetch.
+  const hasSeededDetails =
+    !!seedSelectedDate &&
+    !!initialDetails &&
+    initialDetailsDate === seedSelectedDate;
+  // Start in the loading state when we have an unseeded seed date, so the
+  // detail card shows a skeleton on first paint instead of briefly flashing
+  // the empty-state message before the mount fetch completes.
+  const [detailLoading, setDetailLoading] = useState(
+    !!seedSelectedDate && !hasSeededDetails
+  );
+  const [details, setDetails] = useState<DateDeliveryDetails>(
+    hasSeededDetails && initialDetails
+      ? initialDetails
+      : { subscribers: [], menuBreakdown: [] }
+  );
 
   const holidaySet = useMemo(
     () => new Set(holidays.map((h) => h.holiday_date)),
@@ -644,8 +669,12 @@ function MonthCalendar({
   useEffect(() => {
     if (!firstLoadRef.current) return;
     firstLoadRef.current = false;
-    if (seedSelectedDate) {
+    if (seedSelectedDate && !hasSeededDetails) {
       void openDateDetails(seedSelectedDate);
+    } else if (seedSelectedDate) {
+      // Details came from the server; just reflect the date in the URL the
+      // same way openDateDetails would have.
+      syncUrlParam("date", seedSelectedDate);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1209,6 +1238,8 @@ export function SubscriptionStatusView({
   showDateDetailPanel = false,
   autoOpenFirstDataDate = false,
   defaultTabIndex = 0,
+  initialDetailsDate = null,
+  initialDetails = null,
 }: Props) {
   const tabs = useMemo(() => {
     const t: {
@@ -1395,6 +1426,10 @@ export function SubscriptionStatusView({
                 activeTab === initialTab ? deepLinkDate : null
               }
               autoOpenFirstDataDate={autoOpenFirstDataDate}
+              initialDetailsDate={
+                activeTab === initialTab ? initialDetailsDate : null
+              }
+              initialDetails={activeTab === initialTab ? initialDetails : null}
             />
           )}
 

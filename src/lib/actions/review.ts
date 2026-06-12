@@ -93,6 +93,20 @@ export async function getReviewsForMenu(menuId: string): Promise<Review[]> {
   return (data as Review[]) ?? [];
 }
 
+/** Count-only variant for the /my dashboard badge (avoids the full join). */
+export async function getMyReviewsCount(): Promise<number> {
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return 0;
+
+  const { count } = await supabase
+    .from("reviews")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  return count ?? 0;
+}
+
 export async function getMyReviews(): Promise<Review[]> {
   const supabase = await createClient();
   const user = await getAuthUser();

@@ -149,8 +149,10 @@ export function LoginForm({ titleId }: { titleId?: string }) {
 
       localStorage.removeItem("salad_pending_email");
       toast.success("환영해요! 건강한 끼니에요");
+      // The login action set new auth cookies, which already invalidates the
+      // client router cache — push() will fetch fresh server data. A
+      // router.refresh() here would render the destination page twice.
       router.push(result.redirectTo ?? "/");
-      router.refresh();
     } catch {
       setIsLoading(false);
     }

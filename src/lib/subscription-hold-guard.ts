@@ -24,6 +24,9 @@ export async function hasOpenSubscriptionHold(
 /**
  * True if any of the user's subscriptions has an open hold whose [start,end)
  * covers the delivery date (KST yyyy-mm-dd).
+ *
+ * Single round trip: open holds are joined to subscriptions and filtered by
+ * the owning user, instead of one query per subscription.
  */
 export async function userHasActiveHoldCoveringDeliveryDate(
   client: SupabaseClient,
@@ -31,22 +34,13 @@ export async function userHasActiveHoldCoveringDeliveryDate(
   deliveryDateIso: string
 ): Promise<boolean> {
   const day = deliveryDateIso.slice(0, 10);
-  const { data: subs } = await client
-    .from("subscriptions")
-    .select("id")
-    .eq("user_id", userId);
-  if (!subs?.length) return false;
+  const { data: holds } = await client
+    .from("subscription_holds")
+    .select("start_date, end_date, status, subscriptions!inner(user_id)")
+    .eq("subscriptions.user_id", userId)
+    .in("status", ["scheduled", "active"]);
 
-  for (const sub of subs) {
-    const { data: hold } = await client
-      .from("subscription_holds")
-      .select("start_date, end_date, status")
-      .eq("subscription_id", sub.id)
-      .in("status", ["scheduled", "active"])
-      .maybeSingle();
-    if (hold && isDeliveryDateInOpenHold(hold as HoldDateRow, day)) {
-      return true;
-    }
-  }
-  return false;
+  return ((holds ?? []) as unknown as HoldDateRow[]).some((hold) =>
+    isDeliveryDateInOpenHold(hold, day)
+  );
 }

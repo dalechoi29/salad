@@ -109,21 +109,16 @@ export async function login(formData: FormData): Promise<AuthResult> {
     return { error: "INVALID_PASSWORD_FORMAT" };
   }
 
-  const { error: authError } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
+  // signInWithPassword already returns the authenticated user — a separate
+  // getUser() call would add a redundant auth-server round trip.
+  const { data: signInData, error: authError } =
+    await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-  if (authError) {
-    return { error: "INVALID_CREDENTIALS" };
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    await supabase.auth.signOut();
+  const user = signInData?.user;
+  if (authError || !user) {
     return { error: "INVALID_CREDENTIALS" };
   }
 

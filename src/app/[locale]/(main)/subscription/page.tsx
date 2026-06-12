@@ -48,11 +48,12 @@ export default async function SubscriptionPage({
   if (activePeriod && !periodIdParam) {
     const payEnd = activePeriod.pay_end ? new Date(activePeriod.pay_end) : null;
     if (payEnd && now > payEnd) {
-      const subForClosed = await getMySubscription(activePeriod.id);
-      if (!subForClosed) {
-        const next = await getNextApplicablePeriod(activePeriod.id);
-        if (next) activePeriod = next;
-      }
+      // Fetch both speculatively; `next` is only used when no sub exists.
+      const [subForClosed, next] = await Promise.all([
+        getMySubscription(activePeriod.id),
+        getNextApplicablePeriod(activePeriod.id),
+      ]);
+      if (!subForClosed && next) activePeriod = next;
     }
   }
 

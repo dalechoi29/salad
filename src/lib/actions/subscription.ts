@@ -1,5 +1,6 @@
 "use server";
 
+import { cache as reactCache } from "react";
 import {
   createClient,
   createAdminClient,
@@ -35,45 +36,48 @@ export async function getSubscriptionPeriods(): Promise<SubscriptionPeriod[]> {
   return fetchSubscriptionPeriodsCached();
 }
 
+// The resolvers below derive answers from the cached periods list instead of
+// issuing dedicated queries — the table is tiny and the cache is busted by
+// every period mutation, so results stay correct.
+
 export async function getSubscriptionPeriodById(
   periodId: string
 ): Promise<SubscriptionPeriod | null> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .eq("id", periodId)
-    .single();
-  return (data as SubscriptionPeriod) ?? null;
+  const periods = await fetchSubscriptionPeriodsCached();
+  return periods.find((p) => p.id === periodId) ?? null;
 }
 
 export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
-  const supabase = await createClient();
+  const periods = await fetchSubscriptionPeriodsCached();
   const kstNow = getKSTDate();
-  const now = kstNow.toISOString();
   const todayDate = formatDateISO(kstNow);
 
-  const { data: applyPeriod } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .lte("apply_start", now)
-    .gte("pay_end", now)
-    .order("apply_start", { ascending: false })
-    .limit(1)
-    .single();
+  // Prefer the latest period whose apply window contains "now".
+  const applyPeriod = periods
+    .filter(
+      (p) =>
+        p.apply_start &&
+        p.pay_end &&
+        new Date(p.apply_start) <= kstNow &&
+        new Date(p.pay_end) >= kstNow
+    )
+    .sort((a, b) => (b.apply_start ?? "").localeCompare(a.apply_start ?? ""))[0];
+  if (applyPeriod) return applyPeriod;
 
-  if (applyPeriod) return applyPeriod as SubscriptionPeriod;
+  // Fall back to the period currently being delivered.
+  const deliveryPeriod = periods
+    .filter(
+      (p) =>
+        p.delivery_start &&
+        p.delivery_end &&
+        p.delivery_start.slice(0, 10) <= todayDate &&
+        p.delivery_end.slice(0, 10) >= todayDate
+    )
+    .sort((a, b) =>
+      (b.delivery_start ?? "").localeCompare(a.delivery_start ?? "")
+    )[0];
 
-  const { data: deliveryPeriod } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .lte("delivery_start", todayDate)
-    .gte("delivery_end", todayDate)
-    .order("delivery_start", { ascending: false })
-    .limit(1)
-    .single();
-
-  return (deliveryPeriod as SubscriptionPeriod) ?? null;
+  return deliveryPeriod ?? null;
 }
 
 /**
@@ -84,20 +88,18 @@ export async function getActivePeriod(): Promise<SubscriptionPeriod | null> {
 export async function getNextApplicablePeriod(
   afterPeriodId: string
 ): Promise<SubscriptionPeriod | null> {
-  const supabase = await createClient();
+  const periods = await fetchSubscriptionPeriodsCached();
   const kstNow = getKSTDate();
-  const now = kstNow.toISOString();
 
-  const { data } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .neq("id", afterPeriodId)
-    .gt("pay_end", now)
-    .order("apply_start", { ascending: true })
-    .limit(1)
-    .single();
-
-  return (data as SubscriptionPeriod) ?? null;
+  return (
+    periods
+      .filter(
+        (p) =>
+          p.id !== afterPeriodId && p.pay_end && new Date(p.pay_end) > kstNow
+      )
+      .sort((a, b) => (a.apply_start ?? "").localeCompare(b.apply_start ?? ""))[0] ??
+    null
+  );
 }
 
 export async function createSubscriptionPeriod(
@@ -204,22 +206,30 @@ export async function cancelSubscription(
 
 // ─── User Subscriptions ──────────────────────────────────────
 
+// Request-scoped dedupe: the subscription page can ask for the same
+// (user, period) row twice (closed-period fallback + main batch).
+const getMySubscriptionCached = reactCache(
+  async (periodId: string): Promise<Subscription | null> => {
+    const supabase = await createClient();
+    const user = await getAuthUser();
+
+    if (!user) return null;
+
+    const { data } = await supabase
+      .from("subscriptions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("period_id", periodId)
+      .single();
+
+    return (data as Subscription) ?? null;
+  }
+);
+
 export async function getMySubscription(
   periodId: string
 ): Promise<Subscription | null> {
-  const supabase = await createClient();
-  const user = await getAuthUser();
-
-  if (!user) return null;
-
-  const { data } = await supabase
-    .from("subscriptions")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("period_id", periodId)
-    .single();
-
-  return (data as Subscription) ?? null;
+  return getMySubscriptionCached(periodId);
 }
 
 export async function getMyLatestSubscription(): Promise<Subscription | null> {
@@ -1338,6 +1348,38 @@ export async function getMySkippedDates(
     date: r.delivery_date,
     isReschedule: r.skip_reason === "reschedule",
   }));
+}
+
+/** Batched variant: skipped dates for many subscriptions in one query. */
+export async function getMySkippedDatesBySubscriptionIds(
+  subscriptionIds: string[]
+): Promise<Record<string, { date: string; isReschedule: boolean }[]>> {
+  const uniqueIds = [...new Set(subscriptionIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return {};
+
+  const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return {};
+
+  const { data } = await supabase
+    .from("skipped_delivery_days")
+    .select("subscription_id, delivery_date, skip_reason")
+    .in("subscription_id", uniqueIds)
+    .eq("user_id", user.id);
+
+  const grouped: Record<string, { date: string; isReschedule: boolean }[]> = {};
+  for (const id of uniqueIds) grouped[id] = [];
+  for (const row of (data ?? []) as {
+    subscription_id: string;
+    delivery_date: string;
+    skip_reason: string | null;
+  }[]) {
+    (grouped[row.subscription_id] ??= []).push({
+      date: row.delivery_date,
+      isReschedule: row.skip_reason === "reschedule",
+    });
+  }
+  return grouped;
 }
 
 /**
