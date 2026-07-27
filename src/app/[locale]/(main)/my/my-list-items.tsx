@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Image from "next/image";
+import { useRouter } from "@/i18n/navigation";
 import {
   Card,
   CardContent,
@@ -239,6 +240,8 @@ interface SkipDialogProps {
   onDone: (newlySkipped: string[], type: "vacation" | "reschedule", replacementDates?: string[]) => void;
   deliveryStart?: string;
   deliveryEnd?: string;
+  holidays?: Holiday[];
+  storeClosureDates?: string[];
 }
 
 type DialogStep = "select" | "choose" | "reschedule";
@@ -251,6 +254,8 @@ function SkipDialogShell({
   onDone,
   deliveryStart,
   deliveryEnd,
+  holidays = [],
+  storeClosureDates = [],
   trigger,
 }: SkipDialogProps & { trigger: (open: () => void, hasEligible: boolean) => React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -279,6 +284,15 @@ function SkipDialogShell({
   const localIso = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
+  const storeClosureSet = new Set(storeClosureDates);
+  const publicHolidaySet = new Set(
+    holidays
+      .map((h) => h.holiday_date)
+      .filter((d) => !storeClosureSet.has(d))
+  );
+  const isBlockedDate = (iso: string) =>
+    storeClosureSet.has(iso) || publicHolidaySet.has(iso);
+
   const availableForReschedule: string[] = [];
   if (deliveryStart && deliveryEnd) {
     const cur = new Date(deliveryStart + "T00:00:00");
@@ -286,7 +300,13 @@ function SkipDialogShell({
     while (cur <= end) {
       const dow = cur.getDay();
       const iso = localIso(cur);
-      if (dow >= 1 && dow <= 5 && iso >= cutoff && !selected.has(iso)) {
+      if (
+        dow >= 1 &&
+        dow <= 5 &&
+        iso >= cutoff &&
+        !selected.has(iso) &&
+        !isBlockedDate(iso)
+      ) {
         availableForReschedule.push(iso);
       }
       cur.setDate(cur.getDate() + 1);
@@ -491,6 +511,8 @@ function SkipDialogShell({
             const toColIdx = (dow: number) => (dow >= 1 && dow <= 5 ? dow - 1 : -1);
             const beingSkipped = selected;
             const availableSet = new Set(availableForReschedule);
+            const hasPublicHolidaysInRange = publicHolidaySet.size > 0;
+            const hasStoreClosuresInRange = storeClosureSet.size > 0;
 
             // Determine month range from deliveryStart / deliveryEnd
             const start = deliveryStart ? new Date(deliveryStart + "T00:00:00") : null;
@@ -565,12 +587,19 @@ function SkipDialogShell({
                             const isAvailable = availableSet.has(iso);
                             const isChosen = replacements.has(iso);
                             const isFreed = beingSkipped.has(iso);
+                            const isStoreClosure = storeClosureSet.has(iso);
+                            const isPublicHoliday =
+                              !isStoreClosure && publicHolidaySet.has(iso);
 
                             let circleClass = "flex h-9 w-9 items-center justify-center rounded-full text-sm font-medium transition-colors ";
                             if (isFreed) {
                               circleClass += "bg-muted text-muted-foreground/50 line-through";
                             } else if (isChosen) {
                               circleClass += "bg-primary text-primary-foreground ring-2 ring-primary ring-offset-1";
+                            } else if (isStoreClosure) {
+                              circleClass += "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
+                            } else if (isPublicHoliday) {
+                              circleClass += "bg-red-100 text-red-500 dark:bg-red-900/20 dark:text-red-400";
                             } else if (isAvailable) {
                               circleClass += "cursor-pointer border border-dashed border-muted-foreground/40 text-foreground hover:border-primary hover:bg-primary/10 hover:text-primary";
                             } else {
@@ -603,6 +632,16 @@ function SkipDialogShell({
                     <span className="flex items-center gap-1.5">
                       <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" />연기 중
                     </span>
+                    {hasPublicHolidaysInRange && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-full bg-red-400" />공휴일
+                      </span>
+                    )}
+                    {hasStoreClosuresInRange && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-full bg-yellow-400" />가게 휴무
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -641,9 +680,13 @@ export function SubscriptionCard({
   onSkipDone?: (newSkipped: string[]) => void;
 }) {
   const { subscription, period } = entry;
+  const router = useRouter();
   // Vacation skips earn next-month credit; reschedule skips do not.
   const [vacationSkippedDates, setVacationSkippedDates] = useState<string[]>(entry.skippedDates);
   const [rescheduledDates, setRescheduledDates] = useState<string[]>(entry.rescheduledDates);
+  const [deliveryDateStrings, setDeliveryDateStrings] = useState<string[]>(
+    entry.deliveryDateStrings
+  );
   const allSkippedDates = [...vacationSkippedDates, ...rescheduledDates];
   const [calendarOpen, setCalendarOpen] = useState(false);
   const isPaid = subscription.payment_status === "completed";
@@ -657,7 +700,7 @@ export function SubscriptionCard({
   // Count only deliveries within the primary month — carry-over dates in future
   // months are compensated separately and shouldn't inflate the displayed count.
   const effectiveDeliveryCount = primaryMonthKey
-    ? entry.deliveryDateStrings.filter((d) => d.startsWith(primaryMonthKey)).length
+    ? deliveryDateStrings.filter((d) => d.startsWith(primaryMonthKey)).length
     : Math.max(0, entry.deliveryDayCount);
   const totalSalads = effectiveDeliveryCount * (subscription.salads_per_delivery ?? 1);
 
@@ -708,7 +751,7 @@ export function SubscriptionCard({
     });
   }
 
-  const hasDeliveryDates = entry.deliveryDateStrings.length > 0;
+  const hasDeliveryDates = deliveryDateStrings.length > 0;
 
   // Shared header used in both simple and enhanced cards
   const statsLine = (
@@ -778,7 +821,7 @@ export function SubscriptionCard({
         {calendarOpen && (
           <>
             <DeliveryCalendar
-              deliveryDateStrings={entry.deliveryDateStrings}
+              deliveryDateStrings={deliveryDateStrings}
               skippedDates={rescheduledDates}
               vacationSkippedDates={vacationSkippedDates}
               holidays={entry.holidays ?? []}
@@ -818,6 +861,8 @@ export function SubscriptionCard({
                     skippedDates={allSkippedDates}
                     deliveryStart={period.delivery_start ?? undefined}
                     deliveryEnd={period.delivery_end ?? undefined}
+                    holidays={entry.holidays ?? []}
+                    storeClosureDates={entry.storeClosureDates ?? []}
                     onDone={(newlySkipped, type, replacements = []) => {
                       const replacedSet = new Set(replacements);
                       if (type === "vacation") {
@@ -825,11 +870,20 @@ export function SubscriptionCard({
                           ...prev.filter((d) => !replacedSet.has(d)),
                           ...newlySkipped,
                         ]);
+                        setDeliveryDateStrings((prev) =>
+                          prev.filter((d) => !newlySkipped.includes(d))
+                        );
                       } else {
-                        setVacationSkippedDates((prev) => prev.filter((d) => !replacedSet.has(d)));
+                        setVacationSkippedDates((prev) =>
+                          prev.filter((d) => !replacedSet.has(d))
+                        );
                         setRescheduledDates((prev) => [
                           ...prev.filter((d) => !replacedSet.has(d)),
                           ...newlySkipped,
+                        ]);
+                        setDeliveryDateStrings((prev) => [
+                          ...prev.filter((d) => !newlySkipped.includes(d)),
+                          ...replacements,
                         ]);
                       }
                       const nextAllSkipped = [
@@ -838,6 +892,7 @@ export function SubscriptionCard({
                         ...newlySkipped,
                       ];
                       onSkipDone?.(nextAllSkipped);
+                      router.refresh();
                     }}
                     trigger={(open, hasEligible) =>
                       hasEligible ? (

@@ -6,15 +6,34 @@ import {
   createAdminClient,
   createPublicClient,
   getAuthUser,
+  getAuthUserId,
 } from "@/lib/supabase/server";
 import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import { getKSTDate, formatDateISO } from "@/lib/utils";
+import { getStoreClosures } from "@/lib/actions/store-closure";
+import { bulkSaveDeliveryDays, validateDeliveryDateStringsForSubscription } from "@/lib/actions/delivery";
+import {
+  finalizeCompensationCreditsOnPayment,
+  reserveCompensationCreditsForSubscription,
+  selectCompensationCreditIdsForDays,
+} from "@/lib/actions/compensation-credits";
 import type {
   ActionResult,
   SubscriptionPeriod,
   Subscription,
   PaymentMethod,
+  DeliveryDay,
+  SubscriptionHold,
 } from "@/types";
+
+function revalidateAfterDeliveryScheduleChange(userId?: string): void {
+  updateTag("day-counts");
+  revalidatePath("/");
+  revalidatePath("/my");
+  revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/reports");
+  if (userId) revalidatePath(`/admin/users/${userId}`);
+}
 
 // ─── Subscription Periods (Admin) ────────────────────────────
 
@@ -232,6 +251,62 @@ export async function getMySubscription(
   return getMySubscriptionCached(periodId);
 }
 
+export type SubscriptionBundle = {
+  subscription: Subscription | null;
+  deliveryDays: DeliveryDay[];
+  openHold: SubscriptionHold | null;
+};
+
+// Single joined query replacing three sequential lookups on the subscription
+// page (subscription row → delivery days → open hold). Request-scoped cache
+// so the closed-period fallback and the main render share one round trip.
+const getMySubscriptionBundleCached = reactCache(
+  async (periodId: string): Promise<SubscriptionBundle> => {
+    const empty: SubscriptionBundle = {
+      subscription: null,
+      deliveryDays: [],
+      openHold: null,
+    };
+
+    const supabase = await createClient();
+    const user = await getAuthUser();
+    if (!user) return empty;
+
+    const { data } = await supabase
+      .from("subscriptions")
+      .select("*, delivery_days(*), subscription_holds(*)")
+      .eq("user_id", user.id)
+      .eq("period_id", periodId)
+      .in("subscription_holds.status", ["scheduled", "active"])
+      .maybeSingle();
+
+    if (!data) return empty;
+
+    const {
+      delivery_days: deliveryDayRows,
+      subscription_holds: holdRows,
+      ...subscription
+    } = data as Subscription & {
+      delivery_days: DeliveryDay[] | null;
+      subscription_holds: SubscriptionHold[] | null;
+    };
+
+    const deliveryDays = [...(deliveryDayRows ?? [])].sort((a, b) =>
+      a.week_start.localeCompare(b.week_start)
+    );
+    const openHold =
+      (holdRows ?? []).find((h) => h.user_id === user.id) ?? null;
+
+    return { subscription: subscription as Subscription, deliveryDays, openHold };
+  }
+);
+
+export async function getMySubscriptionBundle(
+  periodId: string
+): Promise<SubscriptionBundle> {
+  return getMySubscriptionBundleCached(periodId);
+}
+
 export async function getMyLatestSubscription(): Promise<Subscription | null> {
   const supabase = await createClient();
   const user = await getAuthUser();
@@ -287,9 +362,62 @@ export type CarryoverReplacement = {
   availableDays: number;
   targetMonth: string;
   usedDates: string[];
-  /** IDs of compensation_credits rows included in availableDays. Applied on subscription save. */
+  /** Pending compensation credit rows (for selecting which IDs to consume). */
+  compensationCredits: { id: string; days: number }[];
+  /** @deprecated Use compensationCredits; kept for callers not yet updated. */
   compensationCreditIds: string[];
 };
+
+type PendingCompensationCredit = {
+  id: string;
+  days: number;
+  source_subscription_id: string | null;
+};
+
+async function fetchPendingCompensationCredits(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  currentSubscriptionId?: string
+): Promise<PendingCompensationCredit[]> {
+  let query = supabase
+    .from("compensation_credits")
+    .select("id, days, source_subscription_id")
+    .eq("user_id", userId)
+    .is("applied_at", null)
+    .order("created_at", { ascending: true });
+
+  if (currentSubscriptionId) {
+    query = query.or(
+      `applied_to_subscription_id.is.null,applied_to_subscription_id.eq.${currentSubscriptionId}`
+    );
+  } else {
+    query = query.is("applied_to_subscription_id", null);
+  }
+
+  const { data } = await query;
+  return (data ?? []) as PendingCompensationCredit[];
+}
+
+/**
+ * Store-closure credits tied to a source subscription overlap with that
+ * subscription's carryover "remaining" when remaining > 0. Only credits from
+ * other sources (e.g. vacation skip) should stack on top.
+ */
+function additionalCreditDaysForCarryover(
+  unresolvedAvailableDays: number,
+  sourceSubscriptionId: string,
+  credits: PendingCompensationCredit[]
+): number {
+  return credits.reduce((sum, credit) => {
+    if (
+      credit.source_subscription_id === sourceSubscriptionId &&
+      unresolvedAvailableDays > 0
+    ) {
+      return sum;
+    }
+    return sum + credit.days;
+  }, 0);
+}
 
 type SubscriptionWithPeriod = {
   id: string;
@@ -351,40 +479,28 @@ function expandDeliveryRowsToDateStrings(
   return dates.sort();
 }
 
-async function periodHasStoreClosure(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  period: SubscriptionWithPeriod["subscription_periods"]
-): Promise<boolean> {
-  if (!period?.delivery_start || !period.delivery_end) return false;
-  const { data } = await supabase
-    .from("store_closures")
-    .select("id")
-    .gte("closure_date", period.delivery_start)
-    .lte("closure_date", period.delivery_end)
-    .limit(1);
-  return (data?.length ?? 0) > 0;
-}
-
 async function getUnresolvedCarryoverReplacement(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
   targetPeriodId: string,
   excludeSubscriptionId?: string
 ): Promise<CarryoverReplacement | null> {
-  const { data: targetPeriod } = await supabase
-    .from("subscription_periods")
-    .select("id, target_month, delivery_start, delivery_end")
-    .eq("id", targetPeriodId)
-    .maybeSingle();
+  // Periods are already cached process-wide — no need for a dedicated query.
+  const targetPeriod = await getSubscriptionPeriodById(targetPeriodId);
   if (!targetPeriod?.delivery_start || !targetPeriod.delivery_end) return null;
 
-  const { data: subs } = await supabase
-    .from("subscriptions")
-    .select(
-      "id, user_id, period_id, frequency_per_week, total_delivery_days, payment_status, closure_reselection_required, subscription_periods(target_month, delivery_start, delivery_end)"
-    )
-    .eq("user_id", userId)
-    .eq("payment_status", "completed");
+  // Store closures are cached too; overlap checks run in memory below instead
+  // of one query per candidate subscription.
+  const [{ data: subs }, allClosures] = await Promise.all([
+    supabase
+      .from("subscriptions")
+      .select(
+        "id, user_id, period_id, frequency_per_week, total_delivery_days, payment_status, closure_reselection_required, subscription_periods(target_month, delivery_start, delivery_end)"
+      )
+      .eq("user_id", userId)
+      .eq("payment_status", "completed"),
+    getStoreClosures(),
+  ]);
 
   const candidates = ((subs ?? []) as unknown as SubscriptionWithPeriod[])
     .filter((sub) => {
@@ -393,7 +509,7 @@ async function getUnresolvedCarryoverReplacement(
         sub.id !== excludeSubscriptionId &&
         sub.period_id !== targetPeriodId &&
         !!deliveryStart &&
-        deliveryStart < targetPeriod.delivery_start
+        deliveryStart < targetPeriod.delivery_start!
       );
     })
     .sort((a, b) =>
@@ -402,33 +518,61 @@ async function getUnresolvedCarryoverReplacement(
       )
     );
 
-  for (const sub of candidates) {
-    const [{ data: deliveryRows }, { data: usedRows }] = await Promise.all([
-      supabase
-        .from("delivery_days")
-        .select("week_start, selected_days")
-        .eq("subscription_id", sub.id),
-      supabase
-        .from("subscriptions")
-        .select("id, carryover_delivery_days")
-        .eq("user_id", userId)
-        .eq("carryover_from_subscription_id", sub.id),
-    ]);
+  if (candidates.length === 0) return null;
 
+  // One batched round trip for all candidates instead of 2-3 queries each.
+  const candidateIds = candidates.map((c) => c.id);
+  const [{ data: allDeliveryRows }, { data: allUsedRows }] = await Promise.all([
+    supabase
+      .from("delivery_days")
+      .select("subscription_id, week_start, selected_days")
+      .in("subscription_id", candidateIds),
+    supabase
+      .from("subscriptions")
+      .select("id, carryover_delivery_days, carryover_from_subscription_id")
+      .eq("user_id", userId)
+      .in("carryover_from_subscription_id", candidateIds),
+  ]);
+
+  const deliveryRowsBySub = new Map<
+    string,
+    { week_start: string; selected_days: number[] | null }[]
+  >();
+  for (const row of (allDeliveryRows ?? []) as {
+    subscription_id: string;
+    week_start: string;
+    selected_days: number[] | null;
+  }[]) {
+    const rows = deliveryRowsBySub.get(row.subscription_id) ?? [];
+    rows.push(row);
+    deliveryRowsBySub.set(row.subscription_id, rows);
+  }
+
+  const usedRowsBySub = new Map<string, CarryoverUsageRow[]>();
+  for (const row of (allUsedRows ?? []) as (CarryoverUsageRow & {
+    carryover_from_subscription_id: string | null;
+  })[]) {
+    if (!row.carryover_from_subscription_id) continue;
+    const rows = usedRowsBySub.get(row.carryover_from_subscription_id) ?? [];
+    rows.push(row);
+    usedRowsBySub.set(row.carryover_from_subscription_id, rows);
+  }
+
+  const closureDates = allClosures.map((c) => c.closure_date.slice(0, 10));
+
+  for (const sub of candidates) {
     const deliveryDates = expandDeliveryRowsToDateStrings(
-      deliveryRows as
-        | { week_start: string; selected_days: number[] | null }[]
-        | null
+      deliveryRowsBySub.get(sub.id) ?? []
     );
     const selectedCount = deliveryDates.length;
     const usedDates = deliveryDates.filter(
       (date) =>
-        date >= targetPeriod.delivery_start &&
-        date <= targetPeriod.delivery_end
+        date >= targetPeriod.delivery_start! &&
+        date <= targetPeriod.delivery_end!
     );
     const remaining = Math.max(0, getEffectiveTotalDays(sub) - selectedCount);
 
-    const usedByOtherSubscriptions = ((usedRows ?? []) as CarryoverUsageRow[])
+    const usedByOtherSubscriptions = (usedRowsBySub.get(sub.id) ?? [])
       .filter((row) => row.id !== excludeSubscriptionId)
       .reduce(
         (sum, row) => sum + (row.carryover_delivery_days ?? 0),
@@ -437,10 +581,13 @@ async function getUnresolvedCarryoverReplacement(
     const available = Math.max(0, remaining - usedByOtherSubscriptions);
     if (available <= 0 && usedDates.length === 0) continue;
 
-    const hasClosure = await periodHasStoreClosure(
-      supabase,
-      sub.subscription_periods
-    );
+    const sourcePeriod = sub.subscription_periods;
+    const sourceStart = sourcePeriod?.delivery_start?.slice(0, 10);
+    const sourceEnd = sourcePeriod?.delivery_end?.slice(0, 10);
+    const hasClosure =
+      !!sourceStart &&
+      !!sourceEnd &&
+      closureDates.some((d) => d >= sourceStart && d <= sourceEnd);
     const isClosureReplacement =
       sub.closure_reselection_required === true || (hasClosure && selectedCount > 0);
     if (!isClosureReplacement) continue;
@@ -448,9 +595,10 @@ async function getUnresolvedCarryoverReplacement(
     return {
       sourceSubscriptionId: sub.id,
       availableDays: available,
-      targetMonth: sub.subscription_periods?.target_month ?? "",
+      targetMonth: sourcePeriod?.target_month ?? "",
       usedDates,
       compensationCreditIds: [],
+      compensationCredits: [],
     };
   }
 
@@ -471,32 +619,33 @@ export async function getMyCarryoverReplacement(
     .eq("period_id", periodId)
     .maybeSingle();
 
-  // Always exclude the current subscription from the "already used" count so
-  // that when the user edits their dates the full entitlement is visible, not
-  // just what was stored from a previous (possibly partial) application.
-  // Fetch pending compensation credits for this user in parallel with carryover lookup
-  const [unresolved, { data: pendingCredits }] = await Promise.all([
+  const [unresolved, creditRows] = await Promise.all([
     getUnresolvedCarryoverReplacement(
       supabase,
       user.id,
       periodId,
       existing?.id as string | undefined
     ),
-    supabase
-      .from("compensation_credits")
-      .select("id, days")
-      .eq("user_id", user.id)
-      .is("applied_to_subscription_id", null),
+    fetchPendingCompensationCredits(
+      supabase,
+      user.id,
+      existing?.id as string | undefined
+    ),
   ]);
 
-  const creditRows = (pendingCredits ?? []) as { id: string; days: number }[];
   const totalCreditDays = creditRows.reduce((sum, r) => sum + r.days, 0);
   const creditIds = creditRows.map((r) => r.id);
 
   if (unresolved) {
+    const extraCreditDays = additionalCreditDaysForCarryover(
+      unresolved.availableDays,
+      unresolved.sourceSubscriptionId,
+      creditRows
+    );
     return {
       ...unresolved,
-      availableDays: unresolved.availableDays + totalCreditDays,
+      availableDays: unresolved.availableDays + extraCreditDays,
+      compensationCredits: creditRows,
       compensationCreditIds: creditIds,
     };
   }
@@ -508,6 +657,7 @@ export async function getMyCarryoverReplacement(
       availableDays: totalCreditDays,
       targetMonth: "",
       usedDates: [],
+      compensationCredits: creditRows,
       compensationCreditIds: creditIds,
     };
   }
@@ -524,6 +674,7 @@ export async function getMyCarryoverReplacement(
       availableDays: (existing.carryover_delivery_days as number | null) ?? 0,
       targetMonth: "",
       usedDates: [],
+      compensationCredits: creditRows,
       compensationCreditIds: creditIds,
     };
   }
@@ -538,7 +689,7 @@ export async function createOrUpdateSubscription(
   totalDeliveryDays?: number,
   carryoverDeliveryDays = 0,
   carryoverFromSubscriptionId?: string | null,
-  compensationCreditIds?: string[]
+  compensationCreditDaysUsed = 0
 ): Promise<ActionResult & { subscriptionId?: string }> {
   const supabase = await createClient();
   const user = await getAuthUser();
@@ -561,6 +712,7 @@ export async function createOrUpdateSubscription(
   }
 
   const normalizedCarryoverDays = Math.max(0, carryoverDeliveryDays);
+  const normalizedCarryoverFromId = carryoverFromSubscriptionId || null;
 
   const { data: existing } = await supabase
     .from("subscriptions")
@@ -574,39 +726,69 @@ export async function createOrUpdateSubscription(
     // Compensation-credits-only path: carryoverFromSubscriptionId is "" (empty)
     // but the user has pending compensation credits covering the days.
     const isCompensationOnly =
-      !carryoverFromSubscriptionId && (compensationCreditIds?.length ?? 0) > 0;
+      !normalizedCarryoverFromId && compensationCreditDaysUsed > 0;
 
-    if (!carryoverFromSubscriptionId && !isCompensationOnly) {
+    if (!normalizedCarryoverFromId && !isCompensationOnly) {
       return { error: "사용할 수 있는 휴무 보상일이 없습니다" };
     }
 
-    if (!isCompensationOnly) {
+    if (isCompensationOnly) {
+      const pendingCredits = await fetchPendingCompensationCredits(
+        supabase,
+        user.id,
+        existingCarryover?.id
+      );
+      const totalCreditDays = pendingCredits.reduce(
+        (sum, row) => sum + row.days,
+        0
+      );
+      if (normalizedCarryoverDays > totalCreditDays) {
+        return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
+      }
+    } else {
       const existingCarryoverDays =
         existingCarryover?.carryover_delivery_days ?? 0;
       const isAlreadyStoredCarryover =
         existingCarryover?.carryover_from_subscription_id ===
-          carryoverFromSubscriptionId &&
+          normalizedCarryoverFromId &&
         normalizedCarryoverDays <= existingCarryoverDays;
 
       if (!isAlreadyStoredCarryover) {
-        const availableCarryover = await getUnresolvedCarryoverReplacement(
-          supabase,
-          user.id,
-          periodId,
-          existingCarryover?.id
-        );
+        const [availableCarryover, pendingCredits] = await Promise.all([
+          getUnresolvedCarryoverReplacement(
+            supabase,
+            user.id,
+            periodId,
+            existingCarryover?.id
+          ),
+          fetchPendingCompensationCredits(
+            supabase,
+            user.id,
+            existingCarryover?.id
+          ),
+        ]);
+
+        const extraCreditDays = availableCarryover
+          ? additionalCreditDaysForCarryover(
+              availableCarryover.availableDays,
+              availableCarryover.sourceSubscriptionId,
+              pendingCredits
+            )
+          : 0;
 
         // Total entitlement = days still claimable (availableDays) + days already
-        // pre-selected for this period (usedDates). A user whose pre-selected dates
-        // fill their entire entitlement will have availableDays = 0 but
-        // usedDates.length > 0, so we must include both in the cap.
+        // pre-selected for this period (usedDates) + credits from other sources.
+        // A user whose pre-selected dates fill their entire entitlement will have
+        // availableDays = 0 but usedDates.length > 0, so we must include both in
+        // the cap. Same-source closure credits stack only when remaining is 0.
         const totalEntitlement = availableCarryover
           ? availableCarryover.availableDays +
+            extraCreditDays +
             (availableCarryover.usedDates?.length ?? 0)
           : 0;
         if (
           !availableCarryover ||
-          availableCarryover.sourceSubscriptionId !== carryoverFromSubscriptionId ||
+          availableCarryover.sourceSubscriptionId !== normalizedCarryoverFromId ||
           normalizedCarryoverDays > totalEntitlement
         ) {
           return { error: "사용할 수 있는 휴무 보상일이 부족합니다" };
@@ -623,7 +805,7 @@ export async function createOrUpdateSubscription(
       payment_status: "pending",
       carryover_delivery_days: normalizedCarryoverDays,
       carryover_from_subscription_id:
-        normalizedCarryoverDays > 0 ? carryoverFromSubscriptionId : null,
+        normalizedCarryoverDays > 0 ? normalizedCarryoverFromId : null,
     };
     if (totalDeliveryDays !== undefined) {
       updateData.total_delivery_days = totalDeliveryDays;
@@ -647,17 +829,16 @@ export async function createOrUpdateSubscription(
         .eq("user_id", user.id);
     }
 
-    // Mark any compensation credits as applied
-    if (compensationCreditIds?.length) {
-      await supabase
-        .from("compensation_credits")
-        .update({
-          applied_to_subscription_id: existing.id,
-          applied_at: new Date().toISOString(),
-        })
-        .in("id", compensationCreditIds)
-        .eq("user_id", user.id);
-    }
+    const creditIdsToReserve = await selectCompensationCreditIdsForDays(
+      user.id,
+      compensationCreditDaysUsed,
+      existing.id
+    );
+    await reserveCompensationCreditsForSubscription(
+      user.id,
+      existing.id,
+      creditIdsToReserve
+    );
 
     revalidatePath("/subscription");
     revalidatePath("/delivery");
@@ -676,8 +857,8 @@ export async function createOrUpdateSubscription(
         total_delivery_days: totalDeliveryDays ?? null,
         carryover_delivery_days: normalizedCarryoverDays,
         carryover_from_subscription_id:
-          normalizedCarryoverDays > 0 && carryoverFromSubscriptionId
-            ? carryoverFromSubscriptionId
+          normalizedCarryoverDays > 0 && normalizedCarryoverFromId
+            ? normalizedCarryoverFromId
             : null,
         payment_status: "pending",
       })
@@ -686,17 +867,16 @@ export async function createOrUpdateSubscription(
 
     if (error) return { error: error.message };
 
-    // Mark any compensation credits as applied
-    if (compensationCreditIds?.length) {
-      await supabase
-        .from("compensation_credits")
-        .update({
-          applied_to_subscription_id: inserted.id,
-          applied_at: new Date().toISOString(),
-        })
-        .in("id", compensationCreditIds)
-        .eq("user_id", user.id);
-    }
+    const creditIdsToReserve = await selectCompensationCreditIdsForDays(
+      user.id,
+      compensationCreditDaysUsed,
+      inserted.id
+    );
+    await reserveCompensationCreditsForSubscription(
+      user.id,
+      inserted.id,
+      creditIdsToReserve
+    );
 
     revalidatePath("/subscription");
     revalidatePath("/delivery");
@@ -774,45 +954,131 @@ export async function resolveCarryoverReplacement(
   return { success: true };
 }
 
+/**
+ * One-shot subscription apply: create/update the subscription row, sync
+ * delivery days, and resolve carryover in a single server request.
+ *
+ * Replaces the previous client flow of three sequential server-action POSTs
+ * (createOrUpdateSubscription → bulkSaveDeliveryDays →
+ * resolveCarryoverReplacement), each of which paid its own network and auth
+ * overhead. Within one request, the Supabase client and auth user lookups are
+ * request-scoped-cached, so they only happen once.
+ */
+export async function applySubscriptionPlan(input: {
+  periodId: string;
+  frequency: number;
+  saladsPerDelivery: number;
+  paidDeliveryDays?: number;
+  carryoverDaysUsed?: number;
+  carryoverFromSubscriptionId?: string | null;
+  /** How many of carryoverDaysUsed come from compensation_credits (not closure carryover). */
+  compensationCreditDaysUsed?: number;
+  weeklySelections: { weekStart: string; selectedDays: number[] }[];
+}): Promise<
+  ActionResult & {
+    subscriptionId?: string;
+    /** Which step failed, so the client can show a matching message. */
+    stage?: "subscription" | "deliveryDays" | "carryover";
+  }
+> {
+  const {
+    periodId,
+    frequency,
+    saladsPerDelivery,
+    paidDeliveryDays,
+    carryoverDaysUsed = 0,
+    carryoverFromSubscriptionId,
+    compensationCreditDaysUsed = 0,
+    weeklySelections,
+  } = input;
+
+  const result = await createOrUpdateSubscription(
+    periodId,
+    frequency,
+    saladsPerDelivery,
+    paidDeliveryDays,
+    carryoverDaysUsed,
+    carryoverFromSubscriptionId,
+    compensationCreditDaysUsed
+  );
+  if (result.error || !result.subscriptionId) {
+    return { ...result, stage: "subscription" };
+  }
+
+  const hasDates = weeklySelections.some((w) => w.selectedDays.length > 0);
+  if (hasDates) {
+    const syncResult = await bulkSaveDeliveryDays(
+      result.subscriptionId,
+      weeklySelections
+    );
+    if (syncResult.error) {
+      return {
+        error: syncResult.error,
+        subscriptionId: result.subscriptionId,
+        stage: "deliveryDays",
+      };
+    }
+
+    if (carryoverDaysUsed > 0) {
+      const resolveResult = await resolveCarryoverReplacement(
+        result.subscriptionId
+      );
+      if (resolveResult.error) {
+        return {
+          error: resolveResult.error,
+          subscriptionId: result.subscriptionId,
+          stage: "carryover",
+        };
+      }
+    }
+  }
+
+  return { success: true, subscriptionId: result.subscriptionId };
+}
+
 export async function updatePaymentAndMarkPaid(
   subscriptionId: string,
   paymentMethod: PaymentMethod
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  // Local JWT validation — this hot path only needs the caller's id.
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  // Preserve the original paid_at if this subscription was already marked
-  // completed (defensive: normally this action only fires on the first
-  // transition from pending → completed).
-  const { data: currentSub } = await supabase
+  // Update and read back paid_at in one round trip; stamp paid_at afterwards
+  // only on the first pending → completed transition so re-marking an
+  // already-paid subscription preserves the original timestamp.
+  const { data: updated, error } = await supabase
     .from("subscriptions")
-    .select("paid_at")
+    .update({
+      payment_method: paymentMethod,
+      payment_status: "completed",
+    })
     .eq("id", subscriptionId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
+    .select("paid_at")
     .maybeSingle();
 
-  const updatePayload: Record<string, unknown> = {
-    payment_method: paymentMethod,
-    payment_status: "completed",
-  };
-  if (!currentSub?.paid_at) {
-    updatePayload.paid_at = new Date().toISOString();
+  if (error) return { error: error.message };
+
+  if (updated && !updated.paid_at) {
+    const { error: paidAtError } = await supabase
+      .from("subscriptions")
+      .update({ paid_at: new Date().toISOString() })
+      .eq("id", subscriptionId)
+      .eq("user_id", userId)
+      .is("paid_at", null);
+    if (paidAtError) return { error: paidAtError.message };
   }
 
-  const { error } = await supabase
-    .from("subscriptions")
-    .update(updatePayload)
-    .eq("id", subscriptionId)
-    .eq("user_id", user.id);
-
-  if (error) return { error: error.message };
+  await finalizeCompensationCreditsOnPayment(userId, subscriptionId);
 
   revalidatePath("/subscription");
   revalidatePath("/delivery");
   revalidatePath("/");
   revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/compensation");
   return { success: true };
 }
 
@@ -867,7 +1133,7 @@ export async function adminUpdateSubscriptionPayment(
   // timestamp. Reverting to 'pending' clears the timestamp.
   const { data: currentSub } = await supabase
     .from("subscriptions")
-    .select("payment_status, paid_at")
+    .select("payment_status, paid_at, user_id")
     .eq("id", subscriptionId)
     .maybeSingle();
 
@@ -892,7 +1158,20 @@ export async function adminUpdateSubscriptionPayment(
 
   if (error) return { error: error.message };
 
+  const subUserId = currentSub?.user_id as string | undefined;
+  if (subUserId && paymentStatus === "completed") {
+    await finalizeCompensationCreditsOnPayment(subUserId, subscriptionId);
+  } else if (subUserId && paymentStatus === "pending") {
+    const admin = createAdminClient();
+    await admin
+      .from("compensation_credits")
+      .update({ applied_at: null })
+      .eq("user_id", subUserId)
+      .eq("applied_to_subscription_id", subscriptionId);
+  }
+
   revalidatePath("/", "layout");
+  revalidatePath("/admin/compensation");
   return { success: true };
 }
 
@@ -1547,9 +1826,8 @@ export async function skipDeliveryDates(
     periodInfo?.target_month ?? null
   );
 
-  revalidatePath("/my");
+  revalidateAfterDeliveryScheduleChange(sub.user_id as string);
   revalidatePath("/admin/users");
-  revalidatePath(`/admin/users/${sub.user_id}`);
   revalidatePath("/admin/compensation");
 
   return { skippedCount: eligibleDates.length };
@@ -1625,9 +1903,8 @@ export async function unskipDeliveryDates(
     );
   }
 
-  revalidatePath("/my");
+  revalidateAfterDeliveryScheduleChange(sub?.user_id as string | undefined);
   revalidatePath("/admin/users");
-  if (sub) revalidatePath(`/admin/users/${sub.user_id}`);
   revalidatePath("/admin/compensation");
 
   return {};
@@ -1654,6 +1931,12 @@ export async function rescheduleDeliveryDates(
     .eq("user_id", user.id)
     .single();
   if (!sub) return { error: "구독을 찾을 수 없습니다." };
+
+  const validation = await validateDeliveryDateStringsForSubscription(
+    supabase,
+    replacementDates
+  );
+  if (validation.error) return { error: validation.error };
 
   // Mark original dates as skipped (reason = reschedule, no compensation credit)
   // AND remove them from delivery_days so they are no longer treated as active.
@@ -1747,7 +2030,7 @@ export async function rescheduleDeliveryDates(
       .in("delivery_date", replacementDates);
   }
 
-  revalidatePath("/my");
-  revalidatePath("/admin/users");
+  revalidateAfterDeliveryScheduleChange(user.id);
+
   return {};
 }

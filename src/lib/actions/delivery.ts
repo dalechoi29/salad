@@ -161,30 +161,23 @@ export async function getMyPreviousDeliveryDates(
   const user = await getAuthUser();
   if (!user) return [];
 
-  // Find the most recent subscription that isn't for the current period.
+  // Most recent subscription for another period, with its delivery days
+  // embedded — one round trip instead of two sequential queries.
   const { data: prevSubs } = await supabase
     .from("subscriptions")
-    .select("id")
+    .select("id, delivery_days(week_start, selected_days)")
     .eq("user_id", user.id)
     .neq("period_id", currentPeriodId)
     .order("created_at", { ascending: false })
     .limit(1);
 
-  const prevSub = prevSubs?.[0];
-  if (!prevSub) return [];
+  const days = (prevSubs?.[0]?.delivery_days ?? []) as {
+    week_start: string;
+    selected_days: number[] | null;
+  }[];
+  if (!days.length) return [];
 
-  const { data: days } = await supabase
-    .from("delivery_days")
-    .select("week_start, selected_days")
-    .eq("user_id", user.id)
-    .eq("subscription_id", prevSub.id)
-    .order("week_start");
-
-  if (!days?.length) return [];
-
-  return expandDeliveryDaysToDateStrings(
-    days as { week_start: string; selected_days: number[] | null }[]
-  );
+  return expandDeliveryDaysToDateStrings(days).sort();
 }
 
 export async function getMyDeliveryDaysBySubscriptionIds(

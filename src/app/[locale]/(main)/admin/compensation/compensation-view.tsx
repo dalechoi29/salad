@@ -27,6 +27,7 @@ import {
   addCompensationCredit,
   updateCompensationCredit,
   deleteCompensationCredit,
+  revertCompensationCreditApplication,
 } from "@/lib/actions/admin";
 
 type UserRow = { id: string; real_name: string | null; email: string | null };
@@ -159,6 +160,22 @@ export function CompensationView({ initialCredits, users }: Props) {
     });
   }
 
+  function handleRevert(id: string) {
+    if (!confirm("적용 상태를 되돌려 미적용으로 표시할까요?")) return;
+    startTransition(async () => {
+      const result = await revertCompensationCreditApplication(id);
+      if (result.error) { toast.error(result.error); return; }
+      toast.success("미적용으로 되돌렸습니다");
+      setCredits((prev) =>
+        prev.map((c) =>
+          c.id === id
+            ? { ...c, appliedAt: null, appliedToSubscriptionId: null }
+            : c
+        )
+      );
+    });
+  }
+
   function formatDate(iso: string) {
     return new Date(iso).toLocaleDateString("ko-KR", {
       year: "numeric",
@@ -241,6 +258,7 @@ export function CompensationView({ initialCredits, users }: Props) {
                 credit={c}
                 onEdit={() => openEdit(c)}
                 onDelete={() => handleDelete(c.id)}
+                onRevert={() => handleRevert(c.id)}
                 formatDate={formatDate}
                 applied
               />
@@ -346,12 +364,14 @@ function CreditRow({
   credit,
   onEdit,
   onDelete,
+  onRevert,
   formatDate,
   applied = false,
 }: {
   credit: CompensationCredit;
   onEdit: () => void;
   onDelete: () => void;
+  onRevert?: () => void;
   formatDate: (iso: string) => string;
   applied?: boolean;
 }) {
@@ -368,7 +388,11 @@ function CreditRow({
                 : "border-amber-400 text-amber-700 dark:text-amber-400"
             }
           >
-            {applied ? "적용 완료" : `+${credit.days}일 미적용`}
+            {applied ? (
+              credit.adminNotes?.startsWith("archive:applied:") ? "기록 복원" : "적용 완료"
+            ) : (
+              `+${credit.days}일 미적용`
+            )}
           </Badge>
         </div>
         <p className="text-muted-foreground">
@@ -380,18 +404,33 @@ function CreditRow({
             적용일: {formatDate(credit.appliedAt)}
           </p>
         )}
-        {credit.adminNotes && (
+        {credit.adminNotes?.startsWith("archive:applied:") ? (
+          <p className="text-xs text-muted-foreground">
+            관리자 삭제분 기록 복원 (재적용되지 않음)
+          </p>
+        ) : credit.adminNotes ? (
           <p className="text-xs text-muted-foreground">메모: {credit.adminNotes}</p>
-        )}
+        ) : null}
         <p className="text-xs text-muted-foreground">
           등록: {formatDate(credit.createdAt)}
         </p>
       </div>
 
       <div className="flex shrink-0 gap-1">
+        {applied && onRevert && !credit.adminNotes?.startsWith("archive:applied:") && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={onRevert}
+          >
+            되돌리기
+          </Button>
+        )}
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
           <Pencil className="h-3.5 w-3.5" />
         </Button>
+        {!credit.adminNotes?.startsWith("archive:applied:") && (
         <Button
           variant="ghost"
           size="icon"
@@ -400,6 +439,7 @@ function CreditRow({
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
+        )}
       </div>
     </li>
   );

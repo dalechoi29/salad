@@ -10,6 +10,7 @@ import { getMyFavoritesCount } from "@/lib/actions/menu";
 import { getMyReviewsCount } from "@/lib/actions/review";
 import { getMyPostsCount } from "@/lib/actions/community";
 import { getHolidays } from "@/lib/actions/holiday";
+import { getStoreClosures } from "@/lib/actions/store-closure";
 import { countSelectedDays } from "@/lib/utils";
 import { expandDeliveryDaysToDateStrings } from "@/lib/delivery-days";
 import { MyPageContent } from "./my-page-content";
@@ -31,6 +32,8 @@ export interface SubscriptionWithDetails {
   rescheduledDates: string[];
   /** Holidays that fall within the subscription's delivery period. */
   holidays: Holiday[];
+  /** Store closure dates (ISO) within the delivery period. */
+  storeClosureDates: string[];
   /** Total number of subscriptions (for "view history" count). */
   totalSubscriptionCount?: number;
 }
@@ -65,17 +68,34 @@ export default async function MyPage() {
     : null;
 
   // Everything below only needs the subscription id / period — one wave.
-  const [days, skippedEntries, holidays, favoritesCount, reviewsCount, postsCount] =
+  const deliveryYear = deliveryStart?.getFullYear();
+  const [days, skippedEntries, holidays, storeClosures, favoritesCount, reviewsCount, postsCount] =
     await Promise.all([
       mostRecent && subPeriod ? getMyDeliveryDays(mostRecent.id) : [],
       mostRecent && subPeriod ? getMySkippedDates(mostRecent.id) : [],
-      deliveryStart
-        ? getHolidays(deliveryStart.getFullYear(), deliveryStart.getMonth() + 1)
-        : ([] as Holiday[]),
+      deliveryYear ? getHolidays(deliveryYear) : ([] as Holiday[]),
+      deliveryYear ? getStoreClosures(deliveryYear) : [],
       getMyFavoritesCount(),
       getMyReviewsCount(),
       getMyPostsCount(),
     ]);
+
+  const deliveryStartIso = subPeriod?.delivery_start;
+  const deliveryEndIso = subPeriod?.delivery_end;
+  const storeClosureDates = storeClosures
+    .map((c) => c.closure_date)
+    .filter(
+      (d) =>
+        !deliveryStartIso ||
+        !deliveryEndIso ||
+        (d >= deliveryStartIso && d <= deliveryEndIso)
+    );
+  const holidaysInPeriod = holidays.filter(
+    (h) =>
+      !deliveryStartIso ||
+      !deliveryEndIso ||
+      (h.holiday_date >= deliveryStartIso && h.holiday_date <= deliveryEndIso)
+  );
 
   const allEntries: SubscriptionWithDetails[] = [];
   if (mostRecent && subPeriod) {
@@ -86,7 +106,8 @@ export default async function MyPage() {
       deliveryDateStrings: expandDeliveryDaysToDateStrings(days),
       skippedDates: skippedEntries.filter((e) => !e.isReschedule).map((e) => e.date),
       rescheduledDates: skippedEntries.filter((e) => e.isReschedule).map((e) => e.date),
-      holidays,
+      holidays: holidaysInPeriod,
+      storeClosureDates,
       totalSubscriptionCount: allSubscriptions.length,
     });
   }

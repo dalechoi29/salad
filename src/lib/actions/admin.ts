@@ -14,11 +14,27 @@ import type {
   SubscriptionHoldDurationKind,
 } from "@/types";
 import { formatDateISO, getKSTDate } from "@/lib/utils";
+import {
+  buildSkippedDateKeySet,
+  countSaladsPerDateFromDeliveryRows,
+  expandActiveDeliveryDatesBySub,
+  isDeliveryDateSkipped,
+  userIdsForActiveDeliveryDate,
+} from "@/lib/delivery-schedule";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getSubscriptionPeriodById } from "@/lib/actions/subscription";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const SUPER_ADMIN_ROLES = ["super_admin"];
+
+function revalidateDeliveryScheduleViews(userId?: string): void {
+  updateTag("day-counts");
+  revalidatePath("/");
+  revalidatePath("/my");
+  revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/reports");
+  if (userId) revalidatePath(`/admin/users/${userId}`);
+}
 
 // Reuses the request-cached profile row instead of issuing another
 // `profiles` query per permission check.
@@ -736,7 +752,7 @@ export async function getVendorReport(
     new Date(new Date(startDate + "T00:00:00").getTime() - 7 * 86400000)
   );
 
-  const [disabledResult, selectionsResult, deliveryDaysResult, assignmentsResult] =
+  const [disabledResult, selectionsResult, deliveryDaysResult, assignmentsResult, skippedResult] =
     await Promise.all([
       supabase.from("profiles").select("id").eq("status", "disabled"),
       supabase
@@ -756,6 +772,11 @@ export async function getVendorReport(
         .from("daily_menu_assignments")
         .select("id, delivery_date, menu_id, slot_type, menu:menus(id, title)")
         .eq("slot_type", "main")
+        .gte("delivery_date", startDate)
+        .lte("delivery_date", endDate),
+      supabase
+        .from("skipped_delivery_days")
+        .select("subscription_id, delivery_date")
         .gte("delivery_date", startDate)
         .lte("delivery_date", endDate),
     ]);
@@ -850,6 +871,8 @@ export async function getVendorReport(
     return sub.salads_per_delivery ?? 1;
   }
 
+  const skippedKeys = buildSkippedDateKeySet(skippedResult.data ?? []);
+
   // Same scope as home 구독 현황: only subscriptions whose period.target_month matches the calendar month of that day.
   const saladsSubscribedPerDate = new Map<string, number>();
   const usersCountedPerDate = new Map<string, Set<string>>();
@@ -863,6 +886,7 @@ export async function getVendorReport(
       dateObj.setDate(weekStart.getDate() + (dayNum - 1));
       const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
       if (dateStr < startDate || dateStr > endDate) continue;
+      if (isDeliveryDateSkipped(dd.subscription_id, dateStr, skippedKeys)) continue;
       const saladsPerDelivery = deliveryDayCountsForVendorReport(dateStr, sub);
       if (saladsPerDelivery == null) continue;
       saladsSubscribedPerDate.set(
@@ -1172,33 +1196,32 @@ const fetchSubscriptionDayCountsCached = unstable_cache(
       saladsMap.set(s.id, s.salads_per_delivery ?? 1);
     }
 
-    const [{ data: disabledProfiles }, { data: deliveryDays }] = await Promise.all([
+    const [{ data: disabledProfiles }, { data: deliveryDays }, { data: skippedDays }] =
+      await Promise.all([
       supabase.from("profiles").select("id").eq("status", "disabled"),
-      supabase.from("delivery_days").select("subscription_id, week_start, selected_days, user_id").in("subscription_id", subIds),
+      supabase
+        .from("delivery_days")
+        .select("subscription_id, week_start, selected_days, user_id")
+        .in("subscription_id", subIds),
+      supabase
+        .from("skipped_delivery_days")
+        .select("subscription_id, delivery_date")
+        .in("subscription_id", subIds),
     ]);
 
     if (!deliveryDays?.length) return {};
 
-    const disabledUserIds = new Set(
-      (disabledProfiles ?? []).map((p: any) => p.id)
+    const disabledUserIds = new Set<string>(
+      (disabledProfiles ?? []).map((p: any) => p.id as string)
     );
+    const skippedKeys = buildSkippedDateKeySet(skippedDays ?? []);
 
-    const dateCounts: Record<string, number> = {};
-    for (const dd of deliveryDays) {
-      if (disabledUserIds.has(dd.user_id)) continue;
-      const saladsPerDelivery = saladsMap.get(dd.subscription_id) ?? 1;
-      for (const day of dd.selected_days) {
-        const date = new Date(dd.week_start + "T00:00:00");
-        date.setDate(date.getDate() + day - 1);
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, "0");
-        const d = String(date.getDate()).padStart(2, "0");
-        const dateStr = `${y}-${m}-${d}`;
-        dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
-      }
-    }
-
-    return dateCounts;
+    return countSaladsPerDateFromDeliveryRows(
+      deliveryDays as any,
+      skippedKeys,
+      saladsMap,
+      disabledUserIds
+    );
   },
   ["subscription-day-counts"],
   { revalidate: 60, tags: ["day-counts"] }
@@ -1222,8 +1245,8 @@ export async function getSubscribersForDate(
 
   if (!subscriptions?.length) return [];
 
-  const disabledUserIds = new Set(
-    (disabledProfiles ?? []).map((p: any) => p.id)
+  const disabledUserIds = new Set<string>(
+    (disabledProfiles ?? []).map((p: any) => p.id as string)
   );
 
   const subIds = subscriptions.map((s: any) => s.id);
@@ -1236,30 +1259,28 @@ export async function getSubscribersForDate(
 
   // Wave 2 — fetch delivery days and names for all period users together,
   // then narrow to the users actually scheduled for the target date in JS.
-  const [{ data: deliveryDays }, { data: profiles }] = await Promise.all([
+  const [{ data: deliveryDays }, { data: profiles }, { data: skippedDays }] =
+    await Promise.all([
     supabase
       .from("delivery_days")
       .select("subscription_id, user_id, week_start, selected_days")
       .in("subscription_id", subIds),
     supabase.from("profiles").select("id, real_name").in("id", periodUserIds),
+    supabase
+      .from("skipped_delivery_days")
+      .select("subscription_id, delivery_date")
+      .in("subscription_id", subIds),
   ]);
 
   if (!deliveryDays?.length) return [];
 
-  const matchedUserIds = new Set<string>();
-  for (const dd of deliveryDays) {
-    if (disabledUserIds.has(dd.user_id)) continue;
-    for (const day of dd.selected_days) {
-      const date = new Date(dd.week_start + "T00:00:00");
-      date.setDate(date.getDate() + day - 1);
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
-      const d = String(date.getDate()).padStart(2, "0");
-      if (`${y}-${m}-${d}` === targetDate) {
-        matchedUserIds.add(dd.user_id);
-      }
-    }
-  }
+  const skippedKeys = buildSkippedDateKeySet(skippedDays ?? []);
+  const matchedUserIds = userIdsForActiveDeliveryDate(
+    deliveryDays as any,
+    skippedKeys,
+    targetDate,
+    disabledUserIds
+  );
 
   if (matchedUserIds.size === 0) return [];
 
@@ -1346,7 +1367,7 @@ export async function getDateDeliveryDetails(
   // Wave 2 — everything keyed on the period's subscription/user ids. The
   // selections and profiles are fetched for all period users and narrowed
   // to the exact date's roster in JS, which keeps this a single wave.
-  const [{ data: deliveryRows }, selectionsResult, { data: profiles }] =
+  const [{ data: deliveryRows }, selectionsResult, { data: profiles }, { data: skippedRows }] =
     await Promise.all([
       admin
         .from("delivery_days")
@@ -1363,24 +1384,19 @@ export async function getDateDeliveryDetails(
         .from("profiles")
         .select("id, real_name, nickname, email")
         .in("id", periodUserIds),
+      admin
+        .from("skipped_delivery_days")
+        .select("subscription_id, delivery_date")
+        .in("subscription_id", subIds),
     ]);
 
-  // Figure out exactly which users are scheduled for this specific date.
-  const usersForDate = new Set<string>();
-  for (const row of deliveryRows ?? []) {
-    const userId = (row as any).user_id as string;
-    if (disabledIds.has(userId)) continue;
-    const weekStart = new Date(((row as any).week_start as string) + "T00:00:00");
-    const selected = ((row as any).selected_days as number[]) ?? [];
-    for (const day of selected) {
-      const d = new Date(weekStart);
-      d.setDate(weekStart.getDate() + (day - 1));
-      if (formatDateISO(d) === date) {
-        usersForDate.add(userId);
-        break;
-      }
-    }
-  }
+  const skippedKeys = buildSkippedDateKeySet(skippedRows ?? []);
+  const usersForDate = userIdsForActiveDeliveryDate(
+    (deliveryRows ?? []) as any,
+    skippedKeys,
+    date,
+    disabledIds
+  );
 
   if (usersForDate.size === 0) return empty;
 
@@ -1580,7 +1596,7 @@ export async function getPeriodStatusBundle(
     admin
       .from("compensation_credits")
       .select("user_id")
-      .is("applied_to_subscription_id", null),
+      .is("applied_at", null),
   ]);
 
   const usersWithPendingCredits = new Set<string>(
@@ -1604,7 +1620,7 @@ export async function getPeriodStatusBundle(
     saladsBySubId.set(s.id as string, (s.salads_per_delivery as number | null) ?? 1);
   }
 
-  const [{ data: profiles }, { data: deliveryRows }, { data: carryoverRows }] =
+  const [{ data: profiles }, { data: deliveryRows }, { data: carryoverRows }, { data: skippedRows }] =
     await Promise.all([
       admin
         .from("profiles")
@@ -1618,6 +1634,10 @@ export async function getPeriodStatusBundle(
         .from("subscriptions")
         .select("carryover_from_subscription_id, carryover_delivery_days")
         .in("carryover_from_subscription_id", subIds),
+      admin
+        .from("skipped_delivery_days")
+        .select("subscription_id, delivery_date")
+        .in("subscription_id", subIds),
     ]);
 
   const profileMap = new Map<
@@ -1635,40 +1655,19 @@ export async function getPeriodStatusBundle(
     if (disabled) disabledUserIds.add(id);
   }
 
-  const dateCounts: Record<string, number> = {};
-  for (const row of deliveryRows ?? []) {
-    const userId = (row as any).user_id as string;
-    if (disabledUserIds.has(userId)) continue;
-    const subId = (row as any).subscription_id as string;
-    const saladsPerDelivery = saladsBySubId.get(subId) ?? 1;
-    const weekStart = (row as any).week_start as string;
-    const selected = ((row as any).selected_days as number[]) ?? [];
-    if (!weekStart || selected.length === 0) continue;
-    const base = new Date(weekStart + "T00:00:00");
-    for (const day of selected) {
-      const d = new Date(base);
-      d.setDate(base.getDate() + (day - 1));
-      const dateStr = formatDateISO(d);
-      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + saladsPerDelivery;
-    }
-  }
+  const skippedKeys = buildSkippedDateKeySet(skippedRows ?? []);
 
-  const datesBySub = new Map<string, Set<string>>();
-  for (const row of deliveryRows ?? []) {
-    const subId = row.subscription_id as string;
-    const weekStart = row.week_start as string;
-    const selected = (row.selected_days as number[]) ?? [];
-    if (!weekStart || selected.length === 0) continue;
+  const dateCounts = countSaladsPerDateFromDeliveryRows(
+    (deliveryRows ?? []) as any,
+    skippedKeys,
+    saladsBySubId,
+    disabledUserIds
+  );
 
-    const set = datesBySub.get(subId) ?? new Set<string>();
-    const base = new Date(weekStart + "T00:00:00");
-    for (const day of selected) {
-      const d = new Date(base);
-      d.setDate(base.getDate() + (day - 1));
-      set.add(formatDateISO(d));
-    }
-    datesBySub.set(subId, set);
-  }
+  const datesBySub = expandActiveDeliveryDatesBySub(
+    (deliveryRows ?? []) as any,
+    skippedKeys
+  );
 
   const usedCarryoverBySource = new Map<string, number>();
   for (const row of (carryoverRows ?? []) as CarryoverUsageRow[]) {
@@ -2068,6 +2067,117 @@ export async function deleteCompensationCredit(
   return { success: true };
 }
 
+export async function revertCompensationCreditApplication(
+  id: string
+): Promise<ActionResult> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("compensation_credits")
+    .update({
+      applied_at: null,
+      applied_to_subscription_id: null,
+    })
+    .eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/admin/compensation");
+  return { success: true };
+}
+
+export async function restoreArchivedCompensationCredit(
+  subscriptionId: string
+): Promise<ActionResult> {
+  if (!(await hasPermission("subscription_status"))) {
+    return { error: "권한이 없습니다" };
+  }
+
+  const admin = createAdminClient();
+  const archiveNote = `archive:applied:${subscriptionId}`;
+
+  const { data: existingArchive } = await admin
+    .from("compensation_credits")
+    .select("id")
+    .eq("admin_notes", archiveNote)
+    .maybeSingle();
+
+  if (existingArchive) {
+    return { error: "이미 복원된 기록이 있습니다" };
+  }
+
+  const { data: sub } = await admin
+    .from("subscriptions")
+    .select(
+      "id, user_id, payment_status, carryover_delivery_days, carryover_from_subscription_id, paid_at, updated_at, subscription_periods(target_month, delivery_start)"
+    )
+    .eq("id", subscriptionId)
+    .maybeSingle();
+
+  if (!sub) return { error: "구독을 찾을 수 없어요" };
+  if ((sub.payment_status as string) !== "completed") {
+    return { error: "결제 완료된 구독만 복원할 수 있어요" };
+  }
+
+  const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
+  if (carryoverDays <= 0) {
+    return { error: "보상일이 사용된 구독이 아니에요" };
+  }
+
+  const periodRow = sub.subscription_periods as
+    | { target_month: string; delivery_start: string }
+    | { target_month: string; delivery_start: string }[]
+    | null;
+  const appliedPeriod = Array.isArray(periodRow)
+    ? periodRow[0]?.target_month
+    : periodRow?.target_month;
+  const appliedStart = Array.isArray(periodRow)
+    ? periodRow[0]?.delivery_start
+    : periodRow?.delivery_start;
+
+  const { data: prevSubs } = await admin
+    .from("subscriptions")
+    .select("subscription_periods(target_month, delivery_start)")
+    .eq("user_id", sub.user_id as string)
+    .eq("payment_status", "completed")
+    .order("created_at", { ascending: false });
+
+  let sourcePeriod = appliedPeriod ?? "출처 미상";
+  if (appliedStart) {
+    for (const row of prevSubs ?? []) {
+      const sp = row.subscription_periods as
+        | { target_month: string; delivery_start: string }
+        | { target_month: string; delivery_start: string }[]
+        | null;
+      const prev = Array.isArray(sp) ? sp[0] : sp;
+      if (prev?.delivery_start && prev.delivery_start < appliedStart) {
+        sourcePeriod = prev.target_month;
+        break;
+      }
+    }
+  }
+
+  const appliedAt =
+    (sub.paid_at as string | null) ??
+    (sub.updated_at as string | null) ??
+    new Date().toISOString();
+
+  const { error } = await admin.from("compensation_credits").insert({
+    user_id: sub.user_id as string,
+    days: carryoverDays,
+    source_period: sourcePeriod,
+    reason: `${appliedPeriod ?? "구독"}에 보상 적용 (기록 복원)`,
+    admin_notes: archiveNote,
+    applied_to_subscription_id: subscriptionId,
+    applied_at: appliedAt,
+    created_at: appliedAt,
+  });
+
+  if (error) return { error: error.message };
+  revalidatePath("/admin/compensation");
+  return { success: true };
+}
+
 /** Returns total pending (unapplied) compensation days for a user. */
 export async function getPendingCompensationDays(
   userId: string
@@ -2077,7 +2187,7 @@ export async function getPendingCompensationDays(
     .from("compensation_credits")
     .select("days")
     .eq("user_id", userId)
-    .is("applied_to_subscription_id", null);
+    .is("applied_at", null);
 
   return (data ?? []).reduce(
     (sum: number, row: any) => sum + (row.days as number),
@@ -2091,7 +2201,7 @@ export async function getUsersWithPendingCredits(): Promise<Set<string>> {
   const { data } = await supabase
     .from("compensation_credits")
     .select("user_id")
-    .is("applied_to_subscription_id", null);
+    .is("applied_at", null);
 
   return new Set((data ?? []).map((r: any) => r.user_id as string));
 }
@@ -2370,7 +2480,7 @@ export async function adminSkipDeliveryDates(
     });
   }
 
-  revalidatePath(`/admin/users/${userId}`);
+  revalidateDeliveryScheduleViews(userId);
   revalidatePath("/admin/users");
 
   return { skippedCount: deliveryDates.length };
@@ -2457,7 +2567,7 @@ export async function adminUnskipDeliveryDates(
     }
   }
 
-  revalidatePath(`/admin/users/${userId}`);
+  revalidateDeliveryScheduleViews(userId);
   revalidatePath("/admin/users");
 
   return {};
@@ -2572,7 +2682,7 @@ export async function adminRescheduleDeliveryDates(
       .in("delivery_date", replacementDates);
   }
 
-  revalidatePath(`/admin/users/${userId}`);
+  revalidateDeliveryScheduleViews(userId);
   revalidatePath("/admin/users");
   return {};
 }

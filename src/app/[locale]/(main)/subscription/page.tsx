@@ -3,17 +3,16 @@ import { getLocale } from "next-intl/server";
 import {
   getActivePeriod,
   getNextApplicablePeriod,
-  getMySubscription,
+  getMySubscriptionBundle,
   getMyLastPaymentMethod,
   getSubscriptionPeriodById,
   getMyCarryoverReplacement,
 } from "@/lib/actions/subscription";
-import type { CarryoverReplacement } from "@/lib/actions/subscription";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getHolidays } from "@/lib/actions/holiday";
 import { getStoreClosures } from "@/lib/actions/store-closure";
-import { getMyDeliveryDays, getMyPreviousDeliveryDates } from "@/lib/actions/delivery";
-import { getOpenSubscriptionHold, getSubscriptionHoldUiAccess } from "@/lib/actions/subscription-hold";
+import { getMyPreviousDeliveryDates } from "@/lib/actions/delivery";
+import { getSubscriptionHoldUiAccess } from "@/lib/actions/subscription-hold";
 import { deliveryDaysToDateStrings, getKSTDate } from "@/lib/utils";
 import { SubscriptionView } from "./subscription-view";
 
@@ -49,11 +48,13 @@ export default async function SubscriptionPage({
     const payEnd = activePeriod.pay_end ? new Date(activePeriod.pay_end) : null;
     if (payEnd && now > payEnd) {
       // Fetch both speculatively; `next` is only used when no sub exists.
-      const [subForClosed, next] = await Promise.all([
-        getMySubscription(activePeriod.id),
+      // The bundle is request-cached, so when the period stays the same the
+      // main batch below reuses this result instead of re-querying.
+      const [bundleForClosed, next] = await Promise.all([
+        getMySubscriptionBundle(activePeriod.id),
         getNextApplicablePeriod(activePeriod.id),
       ]);
-      if (!subForClosed && next) activePeriod = next;
+      if (!bundleForClosed.subscription && next) activePeriod = next;
     }
   }
 
@@ -80,16 +81,28 @@ export default async function SubscriptionPage({
     ? new Date(period.delivery_start + "T00:00:00").getFullYear()
     : now.getFullYear();
 
-  // ── First batch: everything that doesn't depend on whether sub exists ──
-  const [sub, holidayData, storeClosures, lastPm, carryover, holdUiAccess] =
-    await Promise.all([
-      getMySubscription(period.id),
-      getHolidays(deliveryYear),
-      getStoreClosures(deliveryYear),
-      getMyLastPaymentMethod(),
-      getMyCarryoverReplacement(period.id),
-      getSubscriptionHoldUiAccess(), // moved into this batch (was sequential before)
-    ]);
+  // ── Single parallel batch ─────────────────────────────────────
+  // The bundle carries the subscription with its delivery days and open hold
+  // in one joined query, so nothing needs a second sequential round trip.
+  // Previous delivery dates are fetched speculatively (cheap indexed query)
+  // and only used when no subscription exists.
+  const [
+    bundle,
+    holidayData,
+    storeClosures,
+    lastPm,
+    carryover,
+    holdUiAccess,
+    previousDates,
+  ] = await Promise.all([
+    getMySubscriptionBundle(period.id),
+    getHolidays(deliveryYear),
+    getStoreClosures(deliveryYear),
+    getMyLastPaymentMethod(),
+    getMyCarryoverReplacement(period.id),
+    getSubscriptionHoldUiAccess(),
+    getMyPreviousDeliveryDates(period.id),
+  ]);
 
   const storeClosureDates = storeClosures.map((c) => c.closure_date);
   const holidays = [
@@ -97,21 +110,12 @@ export default async function SubscriptionPage({
     ...storeClosureDates,
   ];
 
-  // ── Second batch: depends on whether sub exists ──────────────
-  let savedDateStrings: string[] = [];
-  let openHold = null;
-  let previousDeliveryDates: string[] = [];
-
-  if (sub) {
-    const [deliveryDays, hold] = await Promise.all([
-      getMyDeliveryDays(sub.id),
-      getOpenSubscriptionHold(sub.id),
-    ]);
-    savedDateStrings = deliveryDaysToDateStrings(deliveryDays);
-    openHold = hold;
-  } else {
-    previousDeliveryDates = await getMyPreviousDeliveryDates(period.id);
-  }
+  const sub = bundle.subscription;
+  const savedDateStrings = sub
+    ? deliveryDaysToDateStrings(bundle.deliveryDays)
+    : [];
+  const openHold = sub ? bundle.openHold : null;
+  const previousDeliveryDates = sub ? [] : previousDates;
 
   return (
     <SubscriptionView

@@ -18,8 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Calendar } from "@/components/ui/calendar";
 import { cn, formatDateISO } from "@/lib/utils";
 import {
-  createOrUpdateSubscription,
-  resolveCarryoverReplacement,
+  applySubscriptionPlan,
   updatePaymentAndMarkPaid,
   updatePaymentMethod,
   cancelSubscription,
@@ -30,7 +29,6 @@ import {
   requestSubscriptionHold,
   updateSubscriptionHoldDuration,
 } from "@/lib/actions/subscription-hold";
-import { bulkSaveDeliveryDays } from "@/lib/actions/delivery";
 import { handleActionError } from "@/lib/handle-action-error";
 import { toast } from "sonner";
 import {
@@ -93,35 +91,14 @@ import {
   todayKstIso,
 } from "@/lib/subscription-hold";
 
-/** UI-only: omit store-closure striping on May weekdays in subscription calendars. Logic still uses full `holidays`. */
-function subscriptionCalendarDisplayHolidayStrings(
-  mergedHolidayIsoStrings: string[],
-  storeClosureIsoStrings: string[] | undefined,
-  enabled: boolean
-): string[] {
-  if (!enabled || !storeClosureIsoStrings?.length) return mergedHolidayIsoStrings;
-  const closureSet = new Set(storeClosureIsoStrings);
-  return mergedHolidayIsoStrings.filter((iso) => {
-    if (!closureSet.has(iso)) return true;
-    const d = new Date(iso + "T00:00:00");
-    return d.getMonth() !== 4;
-  });
-}
-
-/**
- * When true, May store-closure days are not shown as red on subscription DeliveryCalendars only.
- * Disabled in production so 운영 behaves normally; enable in dev/preview for testing.
- */
-const DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR =
-  process.env.NODE_ENV !== "production";
-
 type HoldRequestDurationChoice = "off" | SubscriptionHoldDurationKind;
 
 interface SubscriptionViewProps {
   period: SubscriptionPeriod | null;
   existingSubscription: Subscription | null;
+  /** Public holidays + store closures — used for date blocking logic. */
   holidays: string[];
-  /** Closure dates only (subset of `holidays`); used for optional calendar UI filtering. */
+  /** Store closure dates only — shown yellow on the calendar. */
   storeClosureDates?: string[];
   savedDeliveryDates?: string[];
   lastPaymentMethod?: string | null;
@@ -311,9 +288,25 @@ function datesToWeeklySelections(
   }));
 }
 
+function splitCalendarBlockedDates(
+  mergedHolidayIsoStrings: string[],
+  storeClosureIsoStrings: string[]
+) {
+  const closureSet = new Set(storeClosureIsoStrings);
+  return {
+    publicHolidayDates: mergedHolidayIsoStrings
+      .filter((d) => !closureSet.has(d))
+      .map((d) => new Date(d + "T00:00:00")),
+    storeClosureDates: storeClosureIsoStrings.map(
+      (d) => new Date(d + "T00:00:00")
+    ),
+  };
+}
+
 function DeliveryCalendar({
   selectedDates,
   holidayDates,
+  storeClosureDates = [],
   deliveryStart,
   deliveryEnd,
   calendarMonth,
@@ -322,7 +315,10 @@ function DeliveryCalendar({
   previousDates = [],
 }: {
   selectedDates: Date[];
+  /** Public holidays only (red). */
   holidayDates: Date[];
+  /** Store closure days only (yellow). */
+  storeClosureDates?: Date[];
   deliveryStart: string | null;
   deliveryEnd: string | null;
   calendarMonth: Date;
@@ -354,6 +350,28 @@ function DeliveryCalendar({
       .some((d) => !selectedDateStrings.has(d));
   }, [previousDates, deliveryStart, deliveryEnd, selectedDateStrings]);
 
+  const hasStoreClosuresInRange = useMemo(() => {
+    if (storeClosureDates.length === 0) return false;
+    return storeClosureDates.some((d) => {
+      const iso = formatDateISO(d);
+      return (
+        (!deliveryStart || iso >= deliveryStart) &&
+        (!deliveryEnd || iso <= deliveryEnd)
+      );
+    });
+  }, [storeClosureDates, deliveryStart, deliveryEnd]);
+
+  const hasPublicHolidaysInRange = useMemo(() => {
+    if (holidayDates.length === 0) return false;
+    return holidayDates.some((d) => {
+      const iso = formatDateISO(d);
+      return (
+        (!deliveryStart || iso >= deliveryStart) &&
+        (!deliveryEnd || iso <= deliveryEnd)
+      );
+    });
+  }, [holidayDates, deliveryStart, deliveryEnd]);
+
   return (
     <div className="space-y-2">
       {hasPreviousHints && (
@@ -383,17 +401,23 @@ function DeliveryCalendar({
             if (dow === 0 || dow === 6) return <td className="hidden" />;
 
             const isSelected = selectedDates.some((sd) => isSameDay(sd, d));
-            const isHoliday = holidayDates.some((hd) => isSameDay(hd, d));
+            const isStoreClosure = storeClosureDates.some((cd) =>
+              isSameDay(cd, d)
+            );
+            const isPublicHoliday =
+              !isStoreClosure &&
+              holidayDates.some((hd) => isSameDay(hd, d));
+            const isBlocked = isStoreClosure || isPublicHoliday;
             const inRange =
               startDate && endDate && d >= startDate && d <= endDate;
             const isClickable =
-              !disabled && inRange && !isHoliday && !modifiers.outside;
+              !disabled && inRange && !isBlocked && !modifiers.outside;
             const iso = formatDateISO(d);
             const isPreviousWeekday =
               hasPreviousHints &&
               !modifiers.outside &&
               inRange &&
-              !isHoliday &&
+              !isBlocked &&
               previousDateSet.has(iso);
 
             return (
@@ -407,17 +431,19 @@ function DeliveryCalendar({
                       "flex size-7 items-center justify-center rounded-full text-sm transition-colors",
                       isSelected &&
                         "bg-blue-100 text-blue-600 font-medium dark:bg-blue-900/30 dark:text-blue-400",
-                      isHoliday &&
+                      isStoreClosure &&
+                        "bg-yellow-100 text-yellow-700 font-medium dark:bg-yellow-900/30 dark:text-yellow-400",
+                      isPublicHoliday &&
                         "bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400",
                       modifiers.outside && "text-muted-foreground/30",
                       modifiers.hidden && "invisible",
                       !isSelected &&
-                        !isHoliday &&
+                        !isBlocked &&
                         !modifiers.outside &&
                         isClickable &&
                         "text-foreground hover:bg-muted cursor-pointer",
                       !isClickable &&
-                        !isHoliday &&
+                        !isBlocked &&
                         !modifiers.outside &&
                         !isSelected &&
                         "text-muted-foreground/40"
@@ -441,15 +467,23 @@ function DeliveryCalendar({
           },
         }}
       />
-      <div className="flex items-center justify-center gap-4 text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="inline-block size-3 rounded-full bg-blue-100 dark:bg-blue-900/30" />
           선택한 날짜
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block size-3 rounded-full bg-red-100 dark:bg-red-900/30" />
-          공휴일
-        </span>
+        {hasPublicHolidaysInRange && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block size-3 rounded-full bg-red-100 dark:bg-red-900/30" />
+            공휴일
+          </span>
+        )}
+        {hasStoreClosuresInRange && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block size-3 rounded-full bg-yellow-100 dark:bg-yellow-900/30" />
+            가게 휴무
+          </span>
+        )}
         {hasPreviousHints && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40" />
@@ -482,6 +516,31 @@ function formatDate(dateStr: string) {
     day: "numeric",
     weekday: "short",
   });
+}
+
+function computeCompensationCreditDaysUsed(
+  totalCarryoverDaysUsed: number,
+  carryoverReplacement: CarryoverReplacement | null | undefined
+): number {
+  if (!carryoverReplacement || totalCarryoverDaysUsed <= 0) return 0;
+
+  const credits = carryoverReplacement.compensationCredits ?? [];
+  const totalCreditDays = credits.reduce((sum, c) => sum + c.days, 0);
+  if (totalCreditDays <= 0) return 0;
+
+  if (!carryoverReplacement.sourceSubscriptionId) {
+    return Math.min(totalCreditDays, totalCarryoverDaysUsed);
+  }
+
+  const closureEntitlement = Math.max(
+    0,
+    carryoverReplacement.availableDays - totalCreditDays
+  );
+  const closureUsed = Math.min(closureEntitlement, totalCarryoverDaysUsed);
+  return Math.min(
+    totalCreditDays,
+    Math.max(0, totalCarryoverDaysUsed - closureUsed)
+  );
 }
 
 function getPlannedPaidDeliveryDays(
@@ -721,15 +780,11 @@ function SubscriptionForm({
   const carryoverDaysAvailable = carryoverReplacement?.availableDays ?? 0;
   const carryoverUsedDates = carryoverReplacement?.usedDates ?? [];
   const carryoverDaysAlreadySelected = carryoverUsedDates.length;
-  const holidayDatesForCalendar = useMemo(
-    () =>
-      subscriptionCalendarDisplayHolidayStrings(
-        holidays,
-        storeClosureDates,
-        DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR
-      ).map((d) => new Date(d + "T00:00:00")),
-    [holidays, storeClosureDates]
-  );
+  const { publicHolidayDates, storeClosureDates: storeClosureDatesForCalendar } =
+    useMemo(
+      () => splitCalendarBlockedDates(holidays, storeClosureDates),
+      [holidays, storeClosureDates]
+    );
   const calendarMonth = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
     : new Date();
@@ -845,50 +900,39 @@ function SubscriptionForm({
       // The specific dates the user picks are their choice — the entitlement is
       // just a count of free days, not tied to the exact pre-selected dates.
       const totalCarryoverDaysUsed = carryoverDaysUsed + carryoverDaysAlreadySelected;
-
-      const result = await createOrUpdateSubscription(
-        period.id,
-        effectiveFrequency,
-        salads,
-        paidDeliveryDayCount > 0 ? paidDeliveryDayCount : undefined,
+      const compensationCreditDaysUsed = computeCompensationCreditDaysUsed(
         totalCarryoverDaysUsed,
-        totalCarryoverDaysUsed > 0
-          ? carryoverReplacement?.sourceSubscriptionId
-          : null,
-        carryoverReplacement?.compensationCreditIds
+        carryoverReplacement
       );
+
+      // Single server round trip: subscription + delivery days + carryover.
+      const result = await applySubscriptionPlan({
+        periodId: period.id,
+        frequency: effectiveFrequency,
+        saladsPerDelivery: salads,
+        paidDeliveryDays:
+          paidDeliveryDayCount > 0 ? paidDeliveryDayCount : undefined,
+        carryoverDaysUsed: totalCarryoverDaysUsed,
+        carryoverFromSubscriptionId:
+          totalCarryoverDaysUsed > 0
+            ? carryoverReplacement?.sourceSubscriptionId
+            : null,
+        compensationCreditDaysUsed,
+        weeklySelections: datesToWeeklySelections(selectedDates),
+      });
 
       if (result.error) {
         if (handleActionError(result.error, router)) return;
         toast.error(
-          result.error === "PERIOD_CLOSED"
-            ? "신청 기간이 마감되었습니다"
-            : result.error
+          result.stage === "deliveryDays"
+            ? "배달일 동기화 실패: " + result.error
+            : result.stage === "carryover"
+              ? "휴무 보상일 처리 실패: " + result.error
+              : result.error === "PERIOD_CLOSED"
+                ? "신청 기간이 마감되었습니다"
+                : result.error
         );
         return;
-      }
-
-      if (result.subscriptionId && selectedDates.length > 0) {
-        const syncResult = await bulkSaveDeliveryDays(
-          result.subscriptionId,
-          datesToWeeklySelections(selectedDates)
-        );
-        if (syncResult.error) {
-          if (handleActionError(syncResult.error, router)) return;
-          toast.error("배달일 동기화 실패: " + syncResult.error);
-          return;
-        }
-
-        if (totalCarryoverDaysUsed > 0) {
-          const resolveResult = await resolveCarryoverReplacement(
-            result.subscriptionId
-          );
-          if (resolveResult.error) {
-            if (handleActionError(resolveResult.error, router)) return;
-            toast.error("휴무 보상일 처리 실패: " + resolveResult.error);
-            return;
-          }
-        }
       }
 
       onSuccess();
@@ -999,7 +1043,8 @@ function SubscriptionForm({
               <DeliveryCalendar
                 key={selectedPreset ?? "manual"}
                 selectedDates={selectedDates}
-                holidayDates={holidayDatesForCalendar}
+                holidayDates={publicHolidayDates}
+                storeClosureDates={storeClosureDatesForCalendar}
                 deliveryStart={period.delivery_start}
                 deliveryEnd={period.delivery_end}
                 calendarMonth={calendarMonth}
@@ -1254,6 +1299,12 @@ function SubscriptionStatus({
     holidaySet
   );
 
+  const { publicHolidayDates, storeClosureDates: storeClosureDatesForCalendar } =
+    useMemo(
+      () => splitCalendarBlockedDates(holidays, storeClosureDates),
+      [holidays, storeClosureDates]
+    );
+
   const isCustomDates = (() => {
     if (savedDates.length === 0 || matchedPresetLabel) return false;
     const weekGroups = new Map<string, Set<number>>();
@@ -1272,15 +1323,6 @@ function SubscriptionStatus({
   const [editSelectedDates, setEditSelectedDates] = useState<Date[]>([]);
   const [editShowCalendar, setEditShowCalendar] = useState(false);
 
-  const holidayDatesForCalendar = useMemo(
-    () =>
-      subscriptionCalendarDisplayHolidayStrings(
-        holidays,
-        storeClosureDates,
-        DEBUG_HIDE_MAY_STORE_CLOSURE_STRIPES_ON_SUBSCRIPTION_CALENDAR
-      ).map((d) => new Date(d + "T00:00:00")),
-    [holidays, storeClosureDates]
-  );
   const calendarMonth = period.delivery_start
     ? new Date(period.delivery_start + "T00:00:00")
     : new Date();
@@ -1549,43 +1591,34 @@ function SubscriptionStatus({
       // Save only the dates the user actively chose; the count is stored on the record.
       const totalEditCarryoverDaysUsed =
         editCarryoverDaysUsed + carryoverDaysAlreadySelected;
-
-      const result = await createOrUpdateSubscription(
-        period.id,
-        effectiveFrequency,
-        salads,
-        editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
+      const compensationCreditDaysUsed = computeCompensationCreditDaysUsed(
         totalEditCarryoverDaysUsed,
-        totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null,
-        carryoverReplacement?.compensationCreditIds
+        carryoverReplacement
       );
+
+      // Single server round trip: subscription + delivery days + carryover.
+      const result = await applySubscriptionPlan({
+        periodId: period.id,
+        frequency: effectiveFrequency,
+        saladsPerDelivery: salads,
+        paidDeliveryDays:
+          editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
+        carryoverDaysUsed: totalEditCarryoverDaysUsed,
+        carryoverFromSubscriptionId:
+          totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null,
+        compensationCreditDaysUsed,
+        weeklySelections: datesToWeeklySelections(editSelectedDates),
+      });
       if (result.error) {
         if (handleActionError(result.error, router)) return;
-        toast.error(result.error);
-        return;
-      }
-
-      if (result.subscriptionId && editSelectedDates.length > 0) {
-        const syncResult = await bulkSaveDeliveryDays(
-          result.subscriptionId,
-          datesToWeeklySelections(editSelectedDates)
+        toast.error(
+          result.stage === "deliveryDays"
+            ? "배달일 동기화 실패: " + result.error
+            : result.stage === "carryover"
+              ? "휴무 보상일 처리 실패: " + result.error
+              : result.error
         );
-        if (syncResult.error) {
-          if (handleActionError(syncResult.error, router)) return;
-          toast.error("배달일 동기화 실패: " + syncResult.error);
-          return;
-        }
-
-        if (totalEditCarryoverDaysUsed > 0) {
-          const resolveResult = await resolveCarryoverReplacement(
-            result.subscriptionId
-          );
-          if (resolveResult.error) {
-            if (handleActionError(resolveResult.error, router)) return;
-            toast.error("휴무 보상일 처리 실패: " + resolveResult.error);
-            return;
-          }
-        }
+        return;
       }
 
       const planChanged =
@@ -1895,7 +1928,8 @@ function SubscriptionStatus({
               <DeliveryCalendar
                 key={`hold-cal-${openHold?.id ?? "new"}-${holdRequestKind}-${openHold?.duration_kind ?? ""}`}
                 selectedDates={holdCalendarDisplayDates}
-                holidayDates={holidayDatesForCalendar}
+                holidayDates={publicHolidayDates}
+                storeClosureDates={storeClosureDatesForCalendar}
                 deliveryStart={period.delivery_start}
                 deliveryEnd={period.delivery_end}
                 calendarMonth={calendarMonth}
@@ -2022,7 +2056,8 @@ function SubscriptionStatus({
                   <DeliveryCalendar
                     key={selectedPreset ?? "manual"}
                     selectedDates={editSelectedDates}
-                    holidayDates={holidayDatesForCalendar}
+                    holidayDates={publicHolidayDates}
+                    storeClosureDates={storeClosureDatesForCalendar}
                     deliveryStart={period.delivery_start}
                     deliveryEnd={period.delivery_end}
                     calendarMonth={calendarMonth}

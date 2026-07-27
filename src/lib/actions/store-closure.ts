@@ -8,6 +8,7 @@ import {
   createPublicClient,
   getAuthUser,
 } from "@/lib/supabase/server";
+import { grantStoreClosureCompensationCredits } from "@/lib/actions/compensation-credits";
 import type { ActionResult, StoreClosure } from "@/types";
 
 function getMondayISO(dateStr: string): string {
@@ -170,7 +171,12 @@ export async function addStoreClosureRange(
   for (const date of dates) {
     const cleanup = await cleanupSelectionsForClosure(date);
     affectedCount += cleanup.affectedCount;
-    for (const subId of cleanup.affectedSubIds) directlyAffectedSubIds.add(subId);
+    for (const subId of cleanup.affectedSubIds) {
+      directlyAffectedSubIds.add(subId);
+    }
+    if (cleanup.affectedSubIds.length > 0) {
+      await grantStoreClosureCompensationCredits(date, cleanup.affectedSubIds);
+    }
   }
 
   // Remember the subscriptions whose selected dates were directly removed
@@ -190,6 +196,7 @@ export async function addStoreClosureRange(
   revalidatePath("/menu");
   revalidatePath("/admin/holidays");
   revalidatePath("/admin/subscription-status");
+  revalidatePath("/admin/compensation");
   revalidatePath("/admin/reports");
 
   return { success: true, affectedCount, dateCount: dates.length };
