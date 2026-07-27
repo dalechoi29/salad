@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { FontSizeToggle } from "@/components/layout/font-size-toggle";
+import { AdminNotificationBell } from "@/components/layout/admin-notification-bell";
 
 import { useUser } from "@/components/providers/user-provider";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ export function Header() {
   const tAuth = useTranslations("auth");
   const { user } = useUser();
   const router = useRouter();
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   async function handleLogout() {
     await logout();
@@ -30,6 +32,7 @@ export function Header() {
         </Link>
         <div className="hidden md:block" />
         <div className="flex items-center gap-1">
+          {isAdmin && <AdminNotificationBell />}
           <FontSizeToggle />
           <ThemeToggle />
           {user ? (

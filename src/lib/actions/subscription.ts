@@ -17,6 +17,10 @@ import {
   reserveCompensationCreditsForSubscription,
   selectCompensationCreditIdsForDays,
 } from "@/lib/actions/compensation-credits";
+import {
+  notifyAdminsOfDeliveryPostpone,
+  notifyAdminsOfDeliveryReschedule,
+} from "@/lib/actions/admin-notifications";
 import type {
   ActionResult,
   SubscriptionPeriod,
@@ -1830,6 +1834,16 @@ export async function skipDeliveryDates(
   revalidatePath("/admin/users");
   revalidatePath("/admin/compensation");
 
+  if (isOwner && !bypassCutoff) {
+    await notifyAdminsOfDeliveryPostpone({
+      targetUserId: sub.user_id as string,
+      subscriptionId,
+      targetMonth: periodInfo?.target_month ?? "",
+      skippedDates: eligibleDates,
+      actorUserId: user.id,
+    });
+  }
+
   return { skippedCount: eligibleDates.length };
 }
 
@@ -1926,11 +1940,13 @@ export async function rescheduleDeliveryDates(
 
   const { data: sub } = await supabase
     .from("subscriptions")
-    .select("id, user_id")
+    .select("id, user_id, subscription_periods(target_month)")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .single();
   if (!sub) return { error: "구독을 찾을 수 없습니다." };
+
+  const periodInfo = sub.subscription_periods as { target_month: string } | null;
 
   const validation = await validateDeliveryDateStringsForSubscription(
     supabase,
@@ -2031,6 +2047,15 @@ export async function rescheduleDeliveryDates(
   }
 
   revalidateAfterDeliveryScheduleChange(user.id);
+
+  await notifyAdminsOfDeliveryReschedule({
+    targetUserId: user.id,
+    subscriptionId,
+    targetMonth: periodInfo?.target_month ?? "",
+    skippedDates: datesToSkip,
+    replacementDates,
+    actorUserId: user.id,
+  });
 
   return {};
 }
