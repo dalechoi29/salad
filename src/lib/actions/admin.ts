@@ -23,6 +23,10 @@ import {
 } from "@/lib/delivery-schedule";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getSubscriptionPeriodById } from "@/lib/actions/subscription";
+import {
+  getPaidDeliveryDaysForBilling,
+  getSubscriptionPrice,
+} from "@/lib/subscription-billing";
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const SUPER_ADMIN_ROLES = ["super_admin"];
@@ -1526,10 +1530,10 @@ export type PeriodSubscriber = {
   /** Full price before carryover discount (paid + carryover days × salads × price_per_salad). Null when no carryover. */
   originalPrice: number | null;
   /**
-   * True when this subscriber has pending (unapplied) compensation credits —
-   * meaning they overpaid and the discount was never applied to their payment.
-   * The admin should show their actual paid amount (= originalPrice) and note
-   * that carry-forward days are owed, rather than showing a strikethrough.
+   * True when this subscriber has pending compensation credits AND this
+   * subscription did not already apply a carryover discount. Used to flag
+   * historical overpay / next-month credit cases. When carryoverDays > 0 the
+   * discount was applied to payment — never treat as overpaid.
    */
   hasOverpaidCredit: boolean;
   /** Free bonus delivery days carried over from a previous period due to store closure. */
@@ -1595,13 +1599,9 @@ export async function getPeriodStatusBundle(
       .eq("period_id", periodId),
     admin
       .from("compensation_credits")
-      .select("user_id")
+      .select("user_id, applied_to_subscription_id")
       .is("applied_at", null),
   ]);
-
-  const usersWithPendingCredits = new Set<string>(
-    (pendingCreditsRaw ?? []).map((r: any) => r.user_id as string)
-  );
 
   if (periodErr) console.error("[getPeriodStatusBundle] subscription_periods query error:", periodErr);
   if (subsErr) console.error("[getPeriodStatusBundle] subscriptions query error:", subsErr);
@@ -1615,6 +1615,23 @@ export async function getPeriodStatusBundle(
 
   const userIds = [...new Set(subs.map((s: any) => s.user_id as string))];
   const subIds = subs.map((s: any) => s.id as string);
+  const subIdSet = new Set(subIds);
+
+  // Pending credits reserved on this period's subscriptions are already being
+  // used for the current discount — they must not flip the row into the
+  // "overpaid / show full price" display path.
+  const usersWithPendingCredits = new Set<string>();
+  for (const row of (pendingCreditsRaw ?? []) as {
+    user_id: string;
+    applied_to_subscription_id: string | null;
+  }[]) {
+    const reservedOnThisPeriod =
+      !!row.applied_to_subscription_id &&
+      subIdSet.has(row.applied_to_subscription_id);
+    if (!reservedOnThisPeriod) {
+      usersWithPendingCredits.add(row.user_id);
+    }
+  }
   const saladsBySubId = new Map<string, number>();
   for (const s of subs) {
     saladsBySubId.set(s.id as string, (s.salads_per_delivery as number | null) ?? 1);
@@ -1687,7 +1704,6 @@ export async function getPeriodStatusBundle(
 
     const salads = (sub.salads_per_delivery as number | null) ?? 1;
     const frequency = (sub.frequency_per_week as number | null) ?? 0;
-    const storedTotalDays = (sub.total_delivery_days as number | null) ?? 0;
     const deliveryDates = [...(datesBySub.get(sub.id as string) ?? [])].sort();
     const paymentStatus =
       (sub.payment_status as PeriodSubscriber["paymentStatus"]) ?? "pending";
@@ -1696,13 +1712,19 @@ export async function getPeriodStatusBundle(
     // (see getPeriodSubscribers doc / SubscriberRow).
     if (paymentStatus !== "completed" && deliveryDates.length === 0) continue;
 
-    const totalDeliveryDays = storedTotalDays || frequency * 4;
     const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
-    const price = totalDeliveryDays * salads * pricePerSalad;
-    const originalPrice =
-      carryoverDays > 0 && pricePerSalad > 0
-        ? (totalDeliveryDays + carryoverDays) * salads * pricePerSalad
-        : null;
+    const totalDeliveryDays = getPaidDeliveryDaysForBilling({
+      totalDeliveryDays: sub.total_delivery_days as number | null,
+      frequencyPerWeek: frequency,
+      carryoverDeliveryDays: carryoverDays,
+      selectedDeliveryDayCount: deliveryDates.length,
+    });
+    const { price, originalPrice } = getSubscriptionPrice({
+      paidDeliveryDays: totalDeliveryDays,
+      saladsPerDelivery: salads,
+      pricePerSalad,
+      carryoverDeliveryDays: carryoverDays,
+    });
 
     // Carryover dates are free extras on top of the base plan. Exclude them
     // from the "slots filled" count so remainingSlots reflects only how many
@@ -1721,7 +1743,12 @@ export async function getPeriodStatusBundle(
       paidAt: (sub.paid_at as string | null) ?? null,
       price,
       originalPrice,
-      hasOverpaidCredit: usersWithPendingCredits.has(sub.user_id as string),
+      // If carryover was applied on this subscription, payment already used the
+      // discounted amount (matches /subscription). Only flag overpaid when the
+      // user still has unused pending credits and no discount on this row.
+      hasOverpaidCredit:
+        carryoverDays === 0 &&
+        usersWithPendingCredits.has(sub.user_id as string),
       carryoverDays,
       deliveryDates,
       remainingSlots: Math.max(

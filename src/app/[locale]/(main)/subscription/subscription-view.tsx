@@ -910,8 +910,7 @@ function SubscriptionForm({
         periodId: period.id,
         frequency: effectiveFrequency,
         saladsPerDelivery: salads,
-        paidDeliveryDays:
-          paidDeliveryDayCount > 0 ? paidDeliveryDayCount : undefined,
+        paidDeliveryDays: paidDeliveryDayCount,
         carryoverDaysUsed: totalCarryoverDaysUsed,
         carryoverFromSubscriptionId:
           totalCarryoverDaysUsed > 0
@@ -1601,8 +1600,7 @@ function SubscriptionStatus({
         periodId: period.id,
         frequency: effectiveFrequency,
         saladsPerDelivery: salads,
-        paidDeliveryDays:
-          editPaidDeliveryDays > 0 ? editPaidDeliveryDays : undefined,
+        paidDeliveryDays: editPaidDeliveryDays,
         carryoverDaysUsed: totalEditCarryoverDaysUsed,
         carryoverFromSubscriptionId:
           totalEditCarryoverDaysUsed > 0 ? carryoverSourceSubscriptionId : null,

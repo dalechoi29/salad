@@ -341,11 +341,8 @@ export async function adminUpdateDeliveryDates(
     if (insError) return { error: insError.message };
   }
 
-  const { error: updError } = await admin
-    .from("subscriptions")
-    .update({ total_delivery_days: deliveryDates.length || null })
-    .eq("id", subscriptionId);
-  if (updError) return { error: updError.message };
+  // Do not overwrite total_delivery_days here — that field is paid-only days,
+  // not selected date count (carryover/comp days must not inflate the price).
 
   await cleanupStaleSelectionsForSubscription(
     admin,

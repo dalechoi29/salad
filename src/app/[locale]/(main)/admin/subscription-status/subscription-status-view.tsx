@@ -1106,19 +1106,20 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
           </Badge>
         </div>
         <span className="flex items-center gap-2 text-sm font-medium">
-          {subscriber.hasOverpaidCredit ? (
-            // Overpaid group: show actual paid amount (= originalPrice) and a
-            // carry-forward badge. No strikethrough — the discount was never applied.
+          {subscriber.hasOverpaidCredit && !hasCarryover ? (
+            // True overpay: paid full amount; credit owed for a later month.
             <>
               <span className="text-primary">
-                {(subscriber.originalPrice ?? subscriber.price).toLocaleString()}원 납부
+                {subscriber.price.toLocaleString()}원 납부
               </span>
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
                 보상 이월 예정
               </span>
             </>
           ) : (
-            // Discount-applied group: show strikethrough original and actual price.
+            // Discount applied (or no credit): show paid amount. When carryover
+            // reduced payment, strikethrough the pre-discount total — same as
+            // /subscription.
             <>
               {subscriber.originalPrice !== null && (
                 <span className="font-normal text-muted-foreground line-through">
@@ -1143,25 +1144,14 @@ function SubscriberRow({ subscriber }: { subscriber: PeriodSubscriber }) {
         {hasCarryover && (
           <>
             <span>휴무 보상</span>
-            {subscriber.hasOverpaidCredit ? (
-              <span className="font-medium text-amber-600 dark:text-amber-400">
-                {subscriber.carryoverDays}일 미적용
-                {" "}(총 {subscriber.carryoverDays * subscriber.saladsPerDelivery}개
-                {subscriber.saladsPerDelivery > 1
-                  ? `, 1회 ${subscriber.saladsPerDelivery}개 신청함`
-                  : ""}
-                ) · 이월 예정
-              </span>
-            ) : (
-              <span className="font-medium text-amber-600 dark:text-amber-400">
-                +{subscriber.carryoverDays}일
-                {" "}(총 {subscriber.carryoverDays * subscriber.saladsPerDelivery}개
-                {subscriber.saladsPerDelivery > 1
-                  ? `, 1회 ${subscriber.saladsPerDelivery}개 신청함`
-                  : ""}
-                )
-              </span>
-            )}
+            <span className="font-medium text-amber-600 dark:text-amber-400">
+              +{subscriber.carryoverDays}일
+              {" "}(총 {subscriber.carryoverDays * subscriber.saladsPerDelivery}개
+              {subscriber.saladsPerDelivery > 1
+                ? `, 1회 ${subscriber.saladsPerDelivery}개 신청함`
+                : ""}
+              )
+            </span>
           </>
         )}
 

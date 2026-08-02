@@ -1306,16 +1306,100 @@ export async function adminDeleteSubscription(
 
 export async function getSubscriptionsByPeriod(
   periodId: string
-): Promise<(Subscription & { profiles: { nickname: string; email: string; real_name: string } })[]> {
+): Promise<
+  (Subscription & {
+    realName: string;
+    profiles: { nickname: string; email: string; real_name: string };
+    deliveryDayCount: number;
+  })[]
+> {
   const supabase = await createClient();
+  const user = await getAuthUser();
+  if (!user) return [];
 
-  const { data } = await supabase
+  const { data: callerProfile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (
+    !callerProfile?.role ||
+    !["admin", "super_admin"].includes(callerProfile.role)
+  ) {
+    return [];
+  }
+
+  const admin = createAdminClient();
+
+  const { data: subsRaw } = await admin
     .from("subscriptions")
-    .select("*, profiles(nickname, email, real_name)")
+    .select("*")
     .eq("period_id", periodId)
     .order("created_at", { ascending: false });
 
-  return (data as any) ?? [];
+  const subs = subsRaw ?? [];
+  if (subs.length === 0) return [];
+
+  const userIds = [...new Set(subs.map((s) => s.user_id as string))];
+  const subIds = subs.map((s) => s.id as string);
+
+  const [{ data: profiles }, { data: deliveryRows }] = await Promise.all([
+    admin
+      .from("profiles")
+      .select("id, real_name, nickname, email")
+      .in("id", userIds),
+    admin
+      .from("delivery_days")
+      .select("subscription_id, week_start, selected_days")
+      .in("subscription_id", subIds),
+  ]);
+
+  const profileMap = new Map<
+    string,
+    { real_name: string; nickname: string; email: string }
+  >();
+  for (const p of profiles ?? []) {
+    profileMap.set(p.id as string, {
+      real_name: (p.real_name as string) || "",
+      nickname: (p.nickname as string) || "",
+      email: (p.email as string) || "",
+    });
+  }
+
+  const { expandDeliveryDaysToDateStrings } = await import("@/lib/delivery-days");
+  const countBySub = new Map<string, number>();
+  const rowsBySub = new Map<string, { week_start: string; selected_days: number[] }[]>();
+  for (const row of deliveryRows ?? []) {
+    const subId = row.subscription_id as string;
+    const rows = rowsBySub.get(subId) ?? [];
+    rows.push({
+      week_start: row.week_start as string,
+      selected_days: (row.selected_days as number[]) ?? [],
+    });
+    rowsBySub.set(subId, rows);
+  }
+  for (const [subId, rows] of rowsBySub) {
+    countBySub.set(
+      subId,
+      expandDeliveryDaysToDateStrings(rows).length
+    );
+  }
+
+  return subs.map((sub) => {
+    const profile = profileMap.get(sub.user_id as string);
+    const realName = profile?.real_name || "이름 없음";
+    return {
+      ...sub,
+      realName,
+      profiles: {
+        real_name: profile?.real_name ?? "",
+        nickname: profile?.nickname ?? "",
+        email: profile?.email ?? "",
+      },
+      deliveryDayCount: countBySub.get(sub.id as string) ?? 0,
+    };
+  });
 }
 
 const WEEKDAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];

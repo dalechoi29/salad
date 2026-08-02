@@ -32,6 +32,10 @@ import {
 } from "@/lib/actions/subscription";
 import { getCompanyUsers } from "@/lib/actions/admin";
 import { adminGetDeliveryDates, adminUpdateDeliveryDates } from "@/lib/actions/delivery";
+import {
+  getPaidDeliveryDaysForBilling,
+  getSubscriptionPrice,
+} from "@/lib/subscription-billing";
 import { toast } from "sonner";
 import { formatDateISO, cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
@@ -165,7 +169,9 @@ function getAdminDeliveryPickerRange(
 
 export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementProps) {
   type SubscriberRow = Subscription & {
+    realName: string;
     profiles: { nickname: string; email: string; real_name: string };
+    deliveryDayCount: number;
   };
 
   const [periods, setPeriods] = useState(initialPeriods);
@@ -242,7 +248,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
   }
 
   async function handleDeleteSubscriber(sub: SubscriberRow) {
-    const name = sub.profiles?.real_name || sub.profiles?.nickname || "사용자";
+    const name = sub.realName || "사용자";
     if (
       !window.confirm(
         `${name}님의 이번 기간 구독을 삭제할까요?\n배달 날짜와 메뉴 선택도 함께 삭제됩니다.`
@@ -614,17 +620,20 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                   )?.label ?? sub.payment_method
                                 : "미선택";
                             const carryoverDays = (sub.carryover_delivery_days as number | null) ?? 0;
-                            const paidDeliveryDays = sub.total_delivery_days ?? sub.frequency_per_week * 4;
-                            const paidSalads = paidDeliveryDays * sub.salads_per_delivery;
-                            const totalSalads = (paidDeliveryDays + carryoverDays) * sub.salads_per_delivery;
-                            const totalPrice =
-                              period.price_per_salad > 0
-                                ? paidSalads * period.price_per_salad
-                                : null;
-                            const originalPrice =
-                              carryoverDays > 0 && period.price_per_salad > 0
-                                ? totalSalads * period.price_per_salad
-                                : null;
+                            const selectedDayCount = sub.deliveryDayCount ?? 0;
+                            const paidDeliveryDays = getPaidDeliveryDaysForBilling({
+                              totalDeliveryDays: sub.total_delivery_days,
+                              frequencyPerWeek: sub.frequency_per_week,
+                              carryoverDeliveryDays: carryoverDays,
+                              selectedDeliveryDayCount: selectedDayCount,
+                            });
+                            const totalSalads = selectedDayCount * sub.salads_per_delivery;
+                            const { price: totalPrice, originalPrice } = getSubscriptionPrice({
+                              paidDeliveryDays,
+                              saladsPerDelivery: sub.salads_per_delivery,
+                              pricePerSalad: period.price_per_salad,
+                              carryoverDeliveryDays: carryoverDays,
+                            });
 
                             return (
                               <div
@@ -635,7 +644,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                 <div className="flex items-center justify-between">
                                   <div className="min-w-0">
                                     <p className="truncate font-medium text-sm">
-                                      {sub.profiles.nickname}
+                                      {sub.realName}
                                     </p>
                                     <p className="truncate text-xs text-muted-foreground">
                                       {sub.profiles.email}
@@ -696,7 +705,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                   </span>
                                   <span>·</span>
                                   <span>총 {totalSalads}개</span>
-                                  {totalPrice !== null && (
+                                  {period.price_per_salad > 0 ? (
                                     <>
                                       <span>·</span>
                                       <span className="flex items-center gap-1.5 font-medium text-foreground">
@@ -708,7 +717,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                         {totalPrice.toLocaleString()}원
                                       </span>
                                     </>
-                                  )}
+                                  ) : null}
                                   <span>·</span>
                                   <span>{methodLabel}</span>
                                 </div>
@@ -850,7 +859,7 @@ export function PeriodManagement({ initialPeriods, holidays }: PeriodManagementP
                                                   setSubscribers((prev) =>
                                                     prev.map((s) =>
                                                       s.id === sub.id
-                                                        ? { ...s, total_delivery_days: dateStrings.length || null }
+                                                        ? { ...s, deliveryDayCount: dateStrings.length }
                                                         : s
                                                     )
                                                   );
