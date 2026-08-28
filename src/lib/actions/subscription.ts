@@ -12,6 +12,8 @@ import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import { getKSTDate, formatDateISO } from "@/lib/utils";
 import { getStoreClosures } from "@/lib/actions/store-closure";
 import { bulkSaveDeliveryDays, validateDeliveryDateStringsForSubscription } from "@/lib/actions/delivery";
+import { expandDeliveryDaysToDateStrings } from "@/lib/delivery-days";
+import { getPaidDeliveryDaysFromSelection } from "@/lib/subscription-billing";
 import {
   finalizeCompensationCreditsOnPayment,
   reserveCompensationCreditsForSubscription,
@@ -37,6 +39,42 @@ function revalidateAfterDeliveryScheduleChange(userId?: string): void {
   revalidatePath("/admin/subscription-status");
   revalidatePath("/admin/reports");
   if (userId) revalidatePath(`/admin/users/${userId}`);
+}
+
+/** Raise stored paid days when selected dates minus carryover is higher. */
+async function raiseStoredPaidDaysToMatchSelection(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  subscriptionId: string
+): Promise<void> {
+  const { data: sub } = await supabase
+    .from("subscriptions")
+    .select("total_delivery_days, carryover_delivery_days, payment_status")
+    .eq("id", subscriptionId)
+    .maybeSingle();
+  if (!sub) return;
+  // Keep billed days on already-paid rows so underpayment stays auditable
+  // until an admin re-opens payment after collecting the difference.
+  if ((sub.payment_status as string) === "completed") return;
+
+  const { data: rows } = await supabase
+    .from("delivery_days")
+    .select("week_start, selected_days")
+    .eq("subscription_id", subscriptionId);
+
+  const selectedCount = expandDeliveryDaysToDateStrings(rows ?? []).length;
+  if (selectedCount === 0) return;
+
+  const correct = getPaidDeliveryDaysFromSelection(
+    selectedCount,
+    (sub.carryover_delivery_days as number | null) ?? 0
+  );
+  const stored = (sub.total_delivery_days as number | null) ?? 0;
+  if (correct <= stored) return;
+
+  await supabase
+    .from("subscriptions")
+    .update({ total_delivery_days: correct })
+    .eq("id", subscriptionId);
 }
 
 // ─── Subscription Periods (Admin) ────────────────────────────
@@ -996,11 +1034,20 @@ export async function applySubscriptionPlan(input: {
     weeklySelections,
   } = input;
 
+  const selectedCount = weeklySelections.reduce(
+    (n, w) => n + (w.selectedDays?.length ?? 0),
+    0
+  );
+  const resolvedPaidDays =
+    selectedCount > 0
+      ? getPaidDeliveryDaysFromSelection(selectedCount, carryoverDaysUsed)
+      : paidDeliveryDays;
+
   const result = await createOrUpdateSubscription(
     periodId,
     frequency,
     saladsPerDelivery,
-    paidDeliveryDays,
+    resolvedPaidDays,
     carryoverDaysUsed,
     carryoverFromSubscriptionId,
     compensationCreditDaysUsed
@@ -1049,6 +1096,8 @@ export async function updatePaymentAndMarkPaid(
   const userId = await getAuthUserId();
 
   if (!userId) return { error: "AUTH_REQUIRED" };
+
+  await raiseStoredPaidDaysToMatchSelection(supabase, subscriptionId);
 
   // Update and read back paid_at in one round trip; stamp paid_at afterwards
   // only on the first pending → completed transition so re-marking an
@@ -1147,6 +1196,7 @@ export async function adminUpdateSubscriptionPayment(
   };
 
   if (paymentStatus === "completed") {
+    await raiseStoredPaidDaysToMatchSelection(supabase, subscriptionId);
     const wasAlreadyCompleted = currentSub?.payment_status === "completed";
     if (!wasAlreadyCompleted || !currentSub?.paid_at) {
       updatePayload.paid_at = new Date().toISOString();
@@ -1367,7 +1417,6 @@ export async function getSubscriptionsByPeriod(
     });
   }
 
-  const { expandDeliveryDaysToDateStrings } = await import("@/lib/delivery-days");
   const countBySub = new Map<string, number>();
   const rowsBySub = new Map<string, { week_start: string; selected_days: number[] }[]>();
   for (const row of deliveryRows ?? []) {
@@ -1380,10 +1429,7 @@ export async function getSubscriptionsByPeriod(
     rowsBySub.set(subId, rows);
   }
   for (const [subId, rows] of rowsBySub) {
-    countBySub.set(
-      subId,
-      expandDeliveryDaysToDateStrings(rows).length
-    );
+    countBySub.set(subId, expandDeliveryDaysToDateStrings(rows).length);
   }
 
   return subs.map((sub) => {

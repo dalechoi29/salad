@@ -1,7 +1,23 @@
+/** Paid days from the dates the subscriber actually chose, minus free carryover. */
+export function getPaidDeliveryDaysFromSelection(
+  selectedDeliveryDayCount: number,
+  carryoverDeliveryDays: number
+): number {
+  return Math.max(
+    0,
+    selectedDeliveryDayCount - Math.max(0, carryoverDeliveryDays)
+  );
+}
+
 /**
  * Paid delivery days used for billing (matches /subscription pricing).
  * `total_delivery_days` should store paid-only days; this handles legacy rows
  * where it was set to selected date count or left null.
+ *
+ * When selected dates are known:
+ * - never bill *less* than selected − carryover (fixes undercharge when a
+ *   weekday occurs more often than the cheapest same-frequency preset)
+ * - never bill *less* than stored paid days (vacation skips shrink dates)
  */
 export function getPaidDeliveryDaysForBilling(input: {
   totalDeliveryDays: number | null;
@@ -10,14 +26,19 @@ export function getPaidDeliveryDaysForBilling(input: {
   selectedDeliveryDayCount?: number;
 }): number {
   const carryover = Math.max(0, input.carryoverDeliveryDays);
+  const stored = input.totalDeliveryDays;
 
-  // When actual selected dates are known, mirror /subscription: free carryover
-  // days are part of the selection and reduce what is paid.
   if (input.selectedDeliveryDayCount !== undefined) {
-    return Math.max(0, input.selectedDeliveryDayCount - carryover);
+    const fromSelection = getPaidDeliveryDaysFromSelection(
+      input.selectedDeliveryDayCount,
+      carryover
+    );
+    if (stored !== null && stored !== undefined) {
+      return Math.max(stored, fromSelection);
+    }
+    return fromSelection;
   }
 
-  const stored = input.totalDeliveryDays;
   if (stored !== null && stored !== undefined) {
     if (carryover > 0 && stored <= carryover) {
       return 0;

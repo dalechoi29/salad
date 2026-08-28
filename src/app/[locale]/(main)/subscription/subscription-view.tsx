@@ -543,6 +543,23 @@ function computeCompensationCreditDaysUsed(
   );
 }
 
+function getMaxDeliveryDaysForFrequency(
+  freq: number,
+  start: string | null,
+  end: string | null,
+  holidays: Set<string>
+): number {
+  const presets = SCHEDULE_PRESETS.filter((p) => p.freq === freq);
+  if (presets.length === 0 || !start || !end) return freq * WEEKS_PER_MONTH;
+
+  let max = 0;
+  for (const preset of presets) {
+    const count = countWeekdaysInPeriod(start, end, preset.weekdays, holidays);
+    if (count > max) max = count;
+  }
+  return max === 0 ? freq * WEEKS_PER_MONTH : max;
+}
+
 function getPlannedPaidDeliveryDays(
   frequency: number | null,
   selectedCount: number,
@@ -550,24 +567,20 @@ function getPlannedPaidDeliveryDays(
   holidays: Set<string>,
   carryoverDays: number
 ): number {
+  if (selectedCount > 0) {
+    // Charge for the dates the user actually picked. Do not cap at the
+    // cheapest same-frequency weekday (e.g. 추석-shortened Thu/Fri) — that
+    // undercharges anyone on a weekday that occurs more often.
+    return Math.max(0, selectedCount - carryoverDays);
+  }
+
+  if (frequency === 0) return 0;
   const baseDays = getMinDeliveryDaysForFrequency(
     frequency ?? 0,
     period.delivery_start,
     period.delivery_end,
     holidays
   );
-
-  if (selectedCount > 0) {
-    if (frequency === 0) {
-      return Math.max(0, selectedCount - carryoverDays);
-    }
-    // All available compensation days automatically reduce the paid count
-    // so the user doesn't have to manually pick extra dates to see their
-    // discount. Capped at baseDays so payment never exceeds the plan rate.
-    return Math.min(baseDays, Math.max(0, selectedCount - carryoverDays));
-  }
-
-  if (frequency === 0) return 0;
   // No dates selected yet — show the estimated paid days upfront with
   // compensation already deducted.
   return Math.max(0, baseDays - carryoverDays);
@@ -820,6 +833,12 @@ function SubscriptionForm({
           period.delivery_end,
           holidaySet
         );
+        const maxBaseDays = getMaxDeliveryDaysForFrequency(
+          frequency ?? 0,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
 
         // Enforce weekly frequency cap only while building up the base schedule.
         // Once the user has reached baseDays they are adding carryover (compensation)
@@ -839,7 +858,7 @@ function SubscriptionForm({
 
         const maxSelectable =
           frequency !== null && frequency > 0 && carryoverDaysAvailable > 0
-            ? baseDays + carryoverDaysAvailable
+            ? maxBaseDays + carryoverDaysAvailable
             : null;
         if (maxSelectable !== null && next.length >= maxSelectable) {
           toast.error(`최대 ${maxSelectable}일까지 선택할 수 있어요`);
@@ -1272,12 +1291,21 @@ function SubscriptionStatus({
     subscription.carryover_delivery_days && subscription.carryover_delivery_days > 0
       ? subscription.carryover_delivery_days
       : currentCarryoverDaysUsed + carryoverDaysAlreadySelected;
-  // Paid days = total_delivery_days from DB (paid-only count, set at save time).
-  // Vacation skips do NOT change this — she still paid for the same number of days.
-  const effectivePaidDays = Math.max(
+  // Pending: charge selected − carryover (do not cap at the cheapest weekday).
+  // Already paid: keep the billed day count so undercharged users are not
+  // shown a higher total after the fact.
+  const paidFromSelection =
+    savedDates.length > 0
+      ? Math.max(0, savedDates.length - currentTotalCarryoverDays)
+      : 0;
+  const storedPaidDays = Math.max(
     0,
     appliedDeliveryDays - carryoverDaysAlreadySelected
   );
+  const effectivePaidDays =
+    paymentStatus === "completed"
+      ? storedPaidDays
+      : Math.max(storedPaidDays, paidFromSelection);
   // Original total planned days = paid + free carryover (before any vacation skips).
   const originalTotalDays = effectivePaidDays + currentTotalCarryoverDays;
   // Currently active delivery days — may be fewer than originalTotalDays if the
@@ -1370,6 +1398,12 @@ function SubscriptionStatus({
           period.delivery_end,
           holidaySet
         );
+        const maxBaseDays = getMaxDeliveryDaysForFrequency(
+          frequency,
+          period.delivery_start,
+          period.delivery_end,
+          holidaySet
+        );
 
         // Enforce weekly frequency cap only while building up the base schedule.
         // Once the user has reached baseDays they are adding carryover (compensation)
@@ -1388,7 +1422,7 @@ function SubscriptionStatus({
 
         const maxSelectable =
           frequency > 0 && carryoverDaysAvailable > 0
-            ? baseDays + carryoverDaysAvailable
+            ? maxBaseDays + carryoverDaysAvailable
             : null;
         if (maxSelectable !== null && next.length >= maxSelectable) {
           toast.error(`최대 ${maxSelectable}일까지 선택할 수 있어요`);
@@ -2178,7 +2212,9 @@ function SubscriptionStatus({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">선택한 날짜</span>
                 <span>
-                  {currentDeliveryDays}/{originalTotalDays}일
+                  {currentDeliveryDays < originalTotalDays
+                    ? `${currentDeliveryDays}/${originalTotalDays}일`
+                    : `${currentDeliveryDays}일`}
                 </span>
               </div>
               {currentTotalCarryoverDays > 0 && (
