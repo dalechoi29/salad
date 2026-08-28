@@ -20,22 +20,55 @@ import type { MenuPageShellData, MenuPageWeekData } from "@/lib/menu-page-types"
 
 export type { MenuPageShellData, MenuPageWeekData } from "@/lib/menu-page-types";
 
+type SubscriptionWithPeriod = Subscription & {
+  subscription_periods: SubscriptionPeriod | null;
+};
+
+function periodOf(sub: Subscription): SubscriptionPeriod | null {
+  return (sub as SubscriptionWithPeriod).subscription_periods ?? null;
+}
+
 function findSubscriptionForMonth(
   subscriptions: Subscription[],
   monthStart: string,
-  monthEnd: string
+  monthEnd: string,
+  todayStr: string
 ): Subscription | null {
+  const matches: Subscription[] = [];
   for (const sub of subscriptions) {
-    const period = (sub as Subscription & { subscription_periods: SubscriptionPeriod })
-      .subscription_periods;
+    const period = periodOf(sub);
     if (!period?.delivery_start || !period?.delivery_end) continue;
     const delStart = period.delivery_start.slice(0, 10);
     const delEnd = period.delivery_end.slice(0, 10);
-    if (delStart <= monthEnd && delEnd >= monthStart) {
-      return sub;
-    }
+    if (delStart > monthEnd || delEnd < monthStart) continue;
+    // Next-month dates are selectable only after payment is completed.
+    if (delStart > todayStr && sub.payment_status !== "completed") continue;
+    matches.push(sub);
   }
-  return subscriptions[0] ?? null;
+  return (
+    matches.find((s) => s.payment_status === "completed") ??
+    matches[0] ??
+    null
+  );
+}
+
+/** Earliest paid period whose delivery window has not started yet. */
+function findPaidUpcomingSubscription(
+  subscriptions: Subscription[],
+  todayStr: string
+): Subscription | null {
+  const upcoming = subscriptions.filter((sub) => {
+    if (sub.payment_status !== "completed") return false;
+    const period = periodOf(sub);
+    const start = period?.delivery_start?.slice(0, 10);
+    return !!start && start > todayStr;
+  });
+  upcoming.sort((a, b) =>
+    (periodOf(a)?.delivery_start ?? "").localeCompare(
+      periodOf(b)?.delivery_start ?? ""
+    )
+  );
+  return upcoming[0] ?? null;
 }
 
 function isInLastWeekOfMonth(date: Date): boolean {
@@ -48,7 +81,10 @@ function isInLastWeekOfMonth(date: Date): boolean {
   return date >= lastWeekMonday;
 }
 
-function resolveMonthRange(focusDate?: string): {
+function resolveMonthRange(
+  focusDate: string | undefined,
+  paidUpcoming: Subscription | null
+): {
   monthStart: Date;
   monthEnd: Date;
   todayStr: string;
@@ -66,17 +102,23 @@ function resolveMonthRange(focusDate?: string): {
     monthStart = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
     monthEnd = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
   } else {
-    const targetMonthOffset = isInLastWeekOfMonth(today) ? 1 : 0;
-    monthStart = new Date(
-      today.getFullYear(),
-      today.getMonth() + targetMonthOffset,
-      1
-    );
-    monthEnd = new Date(
-      today.getFullYear(),
-      today.getMonth() + targetMonthOffset + 1,
-      0
-    );
+    const upcomingPeriod = paidUpcoming ? periodOf(paidUpcoming) : null;
+    if (upcomingPeriod?.delivery_start && upcomingPeriod.delivery_end) {
+      monthStart = new Date(upcomingPeriod.delivery_start.slice(0, 10) + "T00:00:00");
+      monthEnd = new Date(upcomingPeriod.delivery_end.slice(0, 10) + "T00:00:00");
+    } else {
+      const targetMonthOffset = isInLastWeekOfMonth(today) ? 1 : 0;
+      monthStart = new Date(
+        today.getFullYear(),
+        today.getMonth() + targetMonthOffset,
+        1
+      );
+      monthEnd = new Date(
+        today.getFullYear(),
+        today.getMonth() + targetMonthOffset + 1,
+        0
+      );
+    }
   }
 
   return { monthStart, monthEnd, todayStr };
@@ -86,13 +128,20 @@ function resolveMonthRange(focusDate?: string): {
 export async function getMenuPageShellData(
   focusDate?: string
 ): Promise<MenuPageShellData> {
-  const { monthStart, monthEnd, todayStr } = resolveMonthRange(focusDate);
+  const allSubscriptions = await getMySubscriptions();
+  const todayStrPreview = formatDateISO(getKSTDate());
+  const paidUpcoming = focusDate
+    ? null
+    : findPaidUpcomingSubscription(allSubscriptions, todayStrPreview);
+  const { monthStart, monthEnd, todayStr } = resolveMonthRange(
+    focusDate,
+    paidUpcoming
+  );
   const rangeStart = formatDateISO(monthStart);
   const rangeEnd = formatDateISO(monthEnd);
 
-  const [allSubscriptions, deliveryDaysBySub, cutoff, weeklyDeadlines, holidays, storeClosures] =
+  const [deliveryDaysBySub, cutoff, weeklyDeadlines, holidays, storeClosures] =
     await Promise.all([
-      getMySubscriptions(),
       getMyDeliveryDaysGrouped(),
       getMenuSelectionCutoff(),
       getWeeklyMenuDeadlines(getWeekMondayISO(rangeStart), rangeEnd),
@@ -100,7 +149,12 @@ export async function getMenuPageShellData(
       getStoreClosures(monthStart.getFullYear()),
     ]);
 
-  const subscription = findSubscriptionForMonth(allSubscriptions, rangeStart, rangeEnd);
+  const subscription = findSubscriptionForMonth(
+    allSubscriptions,
+    rangeStart,
+    rangeEnd,
+    todayStr
+  );
   const myDeliveryDates = subscription
     ? deliveryDaysToDateStrings(deliveryDaysBySub[subscription.id] ?? [])
     : [];

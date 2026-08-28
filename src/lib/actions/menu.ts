@@ -10,6 +10,7 @@ import {
 import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type { ActionResult, Menu, DailyMenu, MenuSelection, MenuFavorite } from "@/types";
 import { userHasActiveHoldCoveringDeliveryDate } from "@/lib/subscription-hold-guard";
+import { formatDateISO, getKSTDate } from "@/lib/utils";
 
 const DEFAULT_SALAD_IMAGES = [
   "/images/default-salad-1.png",
@@ -395,6 +396,38 @@ export async function updateMenuQuantity(
 
   if (await userHasActiveHoldCoveringDeliveryDate(supabase, userId, deliveryDate)) {
     return { error: "홀드 기간에는 메뉴를 변경할 수 없어요." };
+  }
+
+  const todayStr = formatDateISO(getKSTDate());
+  if (deliveryDate > todayStr) {
+    const { data: covering } = await supabase
+      .from("subscriptions")
+      .select("payment_status, subscription_periods(delivery_start, delivery_end)")
+      .eq("user_id", userId);
+    type CoveringRow = {
+      payment_status: string | null;
+      subscription_periods:
+        | { delivery_start: string | null; delivery_end: string | null }
+        | { delivery_start: string | null; delivery_end: string | null }[]
+        | null;
+    };
+    const periodSub = ((covering ?? []) as CoveringRow[]).find((row) => {
+      const raw = row.subscription_periods;
+      const period = Array.isArray(raw) ? raw[0] : raw;
+      const start = period?.delivery_start?.slice(0, 10);
+      const end = period?.delivery_end?.slice(0, 10);
+      return !!start && !!end && start <= deliveryDate && end >= deliveryDate;
+    });
+    const rawPeriod = periodSub?.subscription_periods;
+    const period = Array.isArray(rawPeriod) ? rawPeriod[0] : rawPeriod;
+    const periodStart = period?.delivery_start?.slice(0, 10);
+    if (
+      periodStart &&
+      periodStart > todayStr &&
+      periodSub?.payment_status !== "completed"
+    ) {
+      return { error: "결제가 완료된 다음 구독만 메뉴를 선택할 수 있어요." };
+    }
   }
 
   // No revalidation here on purpose: the menu page keeps selections in
