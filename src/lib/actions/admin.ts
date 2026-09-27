@@ -23,6 +23,7 @@ import {
 } from "@/lib/delivery-schedule";
 import { getCurrentProfile } from "@/lib/actions/auth";
 import { getSubscriptionPeriodById } from "@/lib/actions/subscription";
+import { syncVacationSkipCredit } from "@/lib/actions/compensation-credits";
 import {
   getPaidDeliveryDaysForBilling,
   getSubscriptionPrice,
@@ -2469,43 +2470,13 @@ export async function adminSkipDeliveryDates(
     }
   }
 
-  // Sync credit — count vacation skips (null reason or any non-reschedule reason).
-  // .neq("skip_reason","reschedule") alone would exclude null rows in SQL.
-  const { count } = await supabase
-    .from("skipped_delivery_days")
-    .select("id", { count: "exact", head: true })
-    .eq("subscription_id", subscriptionId)
-    .or("skip_reason.is.null,skip_reason.neq.reschedule");
-
-  const totalSkipped = count ?? 0;
   const period = sub.subscription_periods as { target_month: string } | null;
-
-  const { data: existing } = await supabase
-    .from("compensation_credits")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("source_subscription_id" as any, subscriptionId)
-    .is("applied_at", null)
-    .maybeSingle();
-
-  const targetMonth = period?.target_month ?? null;
-  const monthMatch = targetMonth?.match(/(\d+)월/);
-  const reasonStr = monthMatch ? `${monthMatch[1]}월 구독 연기` : "구독 연기";
-
-  if (existing) {
-    await supabase
-      .from("compensation_credits")
-      .update({ days: totalSkipped, reason: reasonStr })
-      .eq("id", existing.id);
-  } else {
-    await supabase.from("compensation_credits").insert({
-      user_id: userId,
-      days: totalSkipped,
-      source_period: targetMonth,
-      source_subscription_id: subscriptionId,
-      reason: reasonStr,
-    });
-  }
+  const creditSync = await syncVacationSkipCredit(
+    userId,
+    subscriptionId,
+    period?.target_month ?? null
+  );
+  if (creditSync.error) return { error: creditSync.error };
 
   revalidateDeliveryScheduleViews(userId);
   revalidatePath("/admin/users");
@@ -2566,33 +2537,24 @@ export async function adminUnskipDeliveryDates(
     }
   }
 
-  // Re-sync credit — same null-safe OR filter
-  const { count } = await supabase
-    .from("skipped_delivery_days")
-    .select("id", { count: "exact", head: true })
-    .eq("subscription_id", subscriptionId)
-    .or("skip_reason.is.null,skip_reason.neq.reschedule");
-
-  const totalSkipped = count ?? 0;
-
-  const { data: existing } = await supabase
-    .from("compensation_credits")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("source_subscription_id" as any, subscriptionId)
-    .is("applied_at", null)
+  const { data: unskipSub } = await supabase
+    .from("subscriptions")
+    .select("subscription_periods(target_month)")
+    .eq("id", subscriptionId)
     .maybeSingle();
-
-  if (existing) {
-    if (totalSkipped === 0) {
-      await supabase.from("compensation_credits").delete().eq("id", existing.id);
-    } else {
-      await supabase
-        .from("compensation_credits")
-        .update({ days: totalSkipped })
-        .eq("id", existing.id);
-    }
-  }
+  const unskipPeriod = unskipSub?.subscription_periods as
+    | { target_month: string }
+    | { target_month: string }[]
+    | null;
+  const unskipMonth = Array.isArray(unskipPeriod)
+    ? unskipPeriod[0]?.target_month
+    : unskipPeriod?.target_month;
+  const unskipCreditSync = await syncVacationSkipCredit(
+    userId,
+    subscriptionId,
+    unskipMonth ?? null
+  );
+  if (unskipCreditSync.error) return { error: unskipCreditSync.error };
 
   revalidateDeliveryScheduleViews(userId);
   revalidatePath("/admin/users");

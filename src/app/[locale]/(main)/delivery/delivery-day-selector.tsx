@@ -400,7 +400,7 @@ export function DeliveryDaySelector({
               const isStoreClosure = storeClosureSet.has(dateStr);
               const isPastDate = dateStr < todayIso;
               const cutoffClosed = isDateCutoffClosed(dateStr);
-              const disabled = holiday || isPastDate || outOfRange || cutoffClosed;
+              const disabled = holiday || isPastDate || outOfRange;
 
               return (
                 <button
@@ -412,7 +412,7 @@ export function DeliveryDaySelector({
                       ? "border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-900/50 dark:bg-amber-900/10 dark:text-amber-500"
                       : holiday
                         ? "border-red-200 bg-red-50 text-red-400 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-500"
-                      : outOfRange || isPastDate || cutoffClosed
+                      : outOfRange || isPastDate
                         ? "border-muted bg-muted/30 text-muted-foreground opacity-50"
                         : selected
                           ? "border-primary bg-primary/10 text-primary"
@@ -425,12 +425,12 @@ export function DeliveryDaySelector({
                     <span className="w-full text-[9px] leading-tight text-center truncate">
                       {hName}
                     </span>
+                  ) : selected ? (
+                    <Check className="h-3.5 w-3.5" />
                   ) : cutoffClosed ? (
                     <span className="w-full text-[9px] leading-tight text-center truncate">
                       마감
                     </span>
-                  ) : selected ? (
-                    <Check className="h-3.5 w-3.5" />
                   ) : (
                     <span className="h-3.5" />
                   )}

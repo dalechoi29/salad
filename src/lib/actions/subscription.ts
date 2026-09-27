@@ -18,6 +18,7 @@ import {
   finalizeCompensationCreditsOnPayment,
   reserveCompensationCreditsForSubscription,
   selectCompensationCreditIdsForDays,
+  syncVacationSkipCredit,
 } from "@/lib/actions/compensation-credits";
 import {
   notifyAdminsOfDeliveryPostpone,
@@ -231,31 +232,64 @@ export async function cancelSubscription(
 
   const { data: current } = await supabase
     .from("subscriptions")
-    .select("carryover_from_subscription_id")
+    .select("id, payment_status, carryover_from_subscription_id")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const { error } = await supabase
+  if (!current) return { error: "구독을 찾을 수 없어요." };
+  if (current.payment_status === "completed") {
+    return { error: "이미 결제된 구독은 취소할 수 없어요." };
+  }
+
+  // Users have no DELETE RLS on subscriptions — use the service role after
+  // the ownership + unpaid checks above. Also clear credit reservations so
+  // applied_to_subscription_id does not block the delete.
+  const admin = createAdminClient();
+
+  await admin
+    .from("compensation_credits")
+    .update({
+      applied_to_subscription_id: null,
+      applied_at: null,
+    })
+    .eq("user_id", user.id)
+    .eq("applied_to_subscription_id", subscriptionId)
+    .is("applied_at", null);
+
+  const { data: deliveryRows } = await admin
+    .from("delivery_days")
+    .select("week_start, selected_days")
+    .eq("subscription_id", subscriptionId);
+  const dates = expandDeliveryDaysToDateStrings(deliveryRows ?? []);
+  if (dates.length > 0) {
+    await admin
+      .from("user_menu_selections")
+      .delete()
+      .eq("user_id", user.id)
+      .in("delivery_date", dates);
+  }
+
+  await admin.from("delivery_days").delete().eq("subscription_id", subscriptionId);
+
+  const { data: deleted, error } = await admin
     .from("subscriptions")
     .delete()
     .eq("id", subscriptionId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .neq("payment_status", "completed")
+    .select("id");
 
   if (error) return { error: error.message };
+  if (!deleted?.length) return { error: "구독을 취소할 수 없어요." };
 
-  if (current?.carryover_from_subscription_id) {
-    await supabase
+  if (current.carryover_from_subscription_id) {
+    await admin
       .from("subscriptions")
       .update({ closure_reselection_required: true })
       .eq("id", current.carryover_from_subscription_id)
       .eq("user_id", user.id);
   }
-
-  await supabase
-    .from("delivery_days")
-    .delete()
-    .eq("subscription_id", subscriptionId);
 
   updateTag("day-counts");
   revalidatePath("/subscription");
@@ -414,6 +448,7 @@ type PendingCompensationCredit = {
   id: string;
   days: number;
   source_subscription_id: string | null;
+  reason: string | null;
 };
 
 async function fetchPendingCompensationCredits(
@@ -423,7 +458,7 @@ async function fetchPendingCompensationCredits(
 ): Promise<PendingCompensationCredit[]> {
   let query = supabase
     .from("compensation_credits")
-    .select("id, days, source_subscription_id")
+    .select("id, days, source_subscription_id, reason")
     .eq("user_id", userId)
     .is("applied_at", null)
     .order("created_at", { ascending: true });
@@ -451,6 +486,11 @@ function additionalCreditDaysForCarryover(
   credits: PendingCompensationCredit[]
 ): number {
   return credits.reduce((sum, credit) => {
+    // Vacation postpones are a separate entitlement from leftover paid
+    // slots on a closure month. Always stack those credits.
+    if ((credit.reason ?? "").includes("구독 연기")) {
+      return sum + credit.days;
+    }
     if (
       credit.source_subscription_id === sourceSubscriptionId &&
       unresolvedAvailableDays > 0
@@ -564,7 +604,8 @@ async function getUnresolvedCarryoverReplacement(
 
   // One batched round trip for all candidates instead of 2-3 queries each.
   const candidateIds = candidates.map((c) => c.id);
-  const [{ data: allDeliveryRows }, { data: allUsedRows }] = await Promise.all([
+  const [{ data: allDeliveryRows }, { data: allUsedRows }, { data: skipRows }] =
+    await Promise.all([
     supabase
       .from("delivery_days")
       .select("subscription_id, week_start, selected_days")
@@ -574,6 +615,11 @@ async function getUnresolvedCarryoverReplacement(
       .select("id, carryover_delivery_days, carryover_from_subscription_id")
       .eq("user_id", userId)
       .in("carryover_from_subscription_id", candidateIds),
+    supabase
+      .from("skipped_delivery_days")
+      .select("subscription_id")
+      .in("subscription_id", candidateIds)
+      .or("skip_reason.is.null,skip_reason.neq.reschedule"),
   ]);
 
   const deliveryRowsBySub = new Map<
@@ -588,6 +634,14 @@ async function getUnresolvedCarryoverReplacement(
     const rows = deliveryRowsBySub.get(row.subscription_id) ?? [];
     rows.push(row);
     deliveryRowsBySub.set(row.subscription_id, rows);
+  }
+
+  const vacationSkipCountBySub = new Map<string, number>();
+  for (const row of (skipRows ?? []) as { subscription_id: string }[]) {
+    vacationSkipCountBySub.set(
+      row.subscription_id,
+      (vacationSkipCountBySub.get(row.subscription_id) ?? 0) + 1
+    );
   }
 
   const usedRowsBySub = new Map<string, CarryoverUsageRow[]>();
@@ -612,7 +666,12 @@ async function getUnresolvedCarryoverReplacement(
         date >= targetPeriod.delivery_start! &&
         date <= targetPeriod.delivery_end!
     );
-    const remaining = Math.max(0, getEffectiveTotalDays(sub) - selectedCount);
+    const remaining = Math.max(
+      0,
+      getEffectiveTotalDays(sub) -
+        selectedCount -
+        (vacationSkipCountBySub.get(sub.id) ?? 0)
+    );
 
     const usedByOtherSubscriptions = (usedRowsBySub.get(sub.id) ?? [])
       .filter((row) => row.id !== excludeSubscriptionId)
@@ -1811,63 +1870,6 @@ export async function getAdminSkippedDates(
 }
 
 /**
- * Syncs the vacation-skip compensation_credits entry for a subscription after
- * adding or removing skips. One credit entry per subscription (reason = vacation_skip).
- */
-async function syncVacationSkipCredit(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-  subscriptionId: string,
-  sourcePeriod: string | null
-): Promise<void> {
-  // Count vacation skips: rows with skip_reason IS NULL or skip_reason != 'reschedule'.
-  // Cannot use .neq() alone because NULL != 'reschedule' evaluates to NULL in SQL,
-  // which means null-reason rows would be excluded from the count.
-  const { count } = await supabase
-    .from("skipped_delivery_days")
-    .select("id", { count: "exact", head: true })
-    .eq("subscription_id", subscriptionId)
-    .or("skip_reason.is.null,skip_reason.neq.reschedule");
-
-  const totalSkipped = count ?? 0;
-
-  // Find existing auto-created vacation-skip credit (identified by source_subscription_id)
-  const { data: existing } = await supabase
-    .from("compensation_credits")
-    .select("id, applied_at")
-    .eq("user_id", userId)
-    .eq("source_subscription_id" as any, subscriptionId)
-    .is("applied_at", null)
-    .maybeSingle();
-
-  if (totalSkipped === 0) {
-    if (existing) {
-      await supabase.from("compensation_credits").delete().eq("id", existing.id);
-    }
-    return;
-  }
-
-  // Format a human-readable reason like "6월 구독 연기"
-  const monthMatch = sourcePeriod?.match(/(\d+)월/);
-  const reasonStr = monthMatch ? `${monthMatch[1]}월 구독 연기` : "구독 연기";
-
-  if (existing) {
-    await supabase
-      .from("compensation_credits")
-      .update({ days: totalSkipped, reason: reasonStr })
-      .eq("id", existing.id);
-  } else {
-    await supabase.from("compensation_credits").insert({
-      user_id: userId,
-      days: totalSkipped,
-      source_period: sourcePeriod,
-      source_subscription_id: subscriptionId,
-      reason: reasonStr,
-    });
-  }
-}
-
-/**
  * Skip specific delivery dates for a subscription.
  * - Regular users: 2-day cutoff enforced (cannot skip within 2 days of delivery).
  * - Admin override: pass bypassCutoff=true.
@@ -1953,12 +1955,12 @@ export async function skipDeliveryDates(
   }
 
   const periodInfo = sub.subscription_periods as { target_month: string } | null;
-  await syncVacationSkipCredit(
-    supabase,
+  const creditSync = await syncVacationSkipCredit(
     sub.user_id,
     subscriptionId,
     periodInfo?.target_month ?? null
   );
+  if (creditSync.error) return { error: creditSync.error };
 
   revalidateAfterDeliveryScheduleChange(sub.user_id as string);
   revalidatePath("/admin/users");
@@ -2039,12 +2041,12 @@ export async function unskipDeliveryDates(
 
   if (sub) {
     const periodInfo = sub.subscription_periods as { target_month: string } | null;
-    await syncVacationSkipCredit(
-      supabase,
+    const creditSync = await syncVacationSkipCredit(
       sub.user_id,
       subscriptionId,
       periodInfo?.target_month ?? null
     );
+    if (creditSync.error) return { error: creditSync.error };
   }
 
   revalidateAfterDeliveryScheduleChange(sub?.user_id as string | undefined);

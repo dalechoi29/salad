@@ -1743,7 +1743,7 @@ function SubscriptionStatus({
           </Button>
           <h1 className="text-2xl font-bold tracking-tight">구독 현황</h1>
         </div>
-        {canEdit && !isEditing && (
+        {!isPaid && !isEditing && (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={

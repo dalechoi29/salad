@@ -94,11 +94,11 @@ function getMondayISO(dateStr: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function getClosedByDeadlineDate(
+async function getClosedDeadlineDates(
   client: SupabaseClient,
   dates: string[]
-): Promise<string | null> {
-  if (dates.length === 0) return null;
+): Promise<string[]> {
+  if (dates.length === 0) return [];
   const sorted = [...new Set(dates)].sort();
   const weekStarts = [...new Set(sorted.map(getMondayISO))];
   const [{ data: settingsRows }, { data: deadlineRows }] = await Promise.all([
@@ -119,14 +119,82 @@ async function getClosedByDeadlineDate(
     ])
   );
 
+  const closed: string[] = [];
   for (const date of sorted) {
     const override = overrideMap.get(getMondayISO(date));
-    const closed = override
+    const isClosed = override
       ? new Date() >= new Date(override)
       : isSelectionClosed(date, cutoffDay, cutoffTime);
-    if (closed) return date;
+    if (isClosed) closed.push(date);
   }
-  return null;
+  return closed;
+}
+
+/** Assign a random main menu when the user picks a date after the menu deadline. */
+async function assignRandomMenusForClosedDates(
+  client: SupabaseClient,
+  userId: string,
+  dates: string[],
+  saladsPerDelivery: number
+): Promise<void> {
+  const qty = Math.max(1, saladsPerDelivery || 1);
+  const closedDates = await getClosedDeadlineDates(client, dates);
+  if (closedDates.length === 0) return;
+
+  const { data: existing } = await client
+    .from("user_menu_selections")
+    .select("delivery_date")
+    .eq("user_id", userId)
+    .in("delivery_date", closedDates);
+
+  const alreadyPicked = new Set(
+    (existing ?? []).map((row: { delivery_date: string }) => row.delivery_date)
+  );
+  const needAssign = closedDates.filter((date) => !alreadyPicked.has(date));
+  if (needAssign.length === 0) return;
+
+  const { data: assignments } = await client
+    .from("daily_menu_assignments")
+    .select("id, delivery_date")
+    .eq("slot_type", "main")
+    .in("delivery_date", needAssign);
+
+  const idsByDate = new Map<string, string[]>();
+  for (const row of assignments ?? []) {
+    const list = idsByDate.get(row.delivery_date) ?? [];
+    list.push(row.id);
+    idsByDate.set(row.delivery_date, list);
+  }
+
+  const inserts: {
+    user_id: string;
+    daily_menu_id: string;
+    delivery_date: string;
+    quantity: number;
+  }[] = [];
+
+  for (const date of needAssign) {
+    const ids = idsByDate.get(date);
+    if (!ids?.length) continue;
+
+    const quantityByMenu = new Map<string, number>();
+    for (let i = 0; i < qty; i++) {
+      const picked = ids[Math.floor(Math.random() * ids.length)];
+      quantityByMenu.set(picked, (quantityByMenu.get(picked) ?? 0) + 1);
+    }
+    for (const [dailyMenuId, quantity] of quantityByMenu) {
+      inserts.push({
+        user_id: userId,
+        daily_menu_id: dailyMenuId,
+        delivery_date: date,
+        quantity,
+      });
+    }
+  }
+
+  if (inserts.length > 0) {
+    await client.from("user_menu_selections").insert(inserts);
+  }
 }
 
 export async function getMyDeliveryDays(
@@ -368,7 +436,7 @@ export async function saveDeliveryDays(
 
   const { data: subscription } = await supabase
     .from("subscriptions")
-    .select("frequency_per_week, total_delivery_days")
+    .select("frequency_per_week, total_delivery_days, salads_per_delivery")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .single();
@@ -408,11 +476,6 @@ export async function saveDeliveryDays(
   if (blockedPick) {
     return { error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다` };
   }
-  const deadlineClosedPick = await getClosedByDeadlineDate(supabase, selectedDates);
-  if (deadlineClosedPick) {
-    return { error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다` };
-  }
-
   const { data: existing } = await supabase
     .from("delivery_days")
     .select("id")
@@ -451,6 +514,12 @@ export async function saveDeliveryDays(
     subscriptionId,
     newDates
   );
+  await assignRandomMenusForClosedDates(
+    supabase,
+    user.id,
+    newDates,
+    subscription.salads_per_delivery ?? 1
+  );
 
   updateTag("day-counts");
   revalidatePath("/delivery");
@@ -459,7 +528,7 @@ export async function saveDeliveryDays(
   return { success: true };
 }
 
-/** Same validation rules as bulkSaveDeliveryDays (past dates, holidays/closures, menu deadlines). */
+/** Same validation rules as bulkSaveDeliveryDays (past dates, holidays/closures). */
 export async function validateDeliveryDateStringsForSubscription(
   supabase: Awaited<ReturnType<typeof createClient>>,
   dates: string[]
@@ -476,15 +545,6 @@ export async function validateDeliveryDateStringsForSubscription(
       error: `${blockedPick}은 공휴일/매장 휴무일이라 선택할 수 없습니다`,
     };
   }
-  const deadlineClosedPick = await getClosedByDeadlineDate(
-    supabase,
-    dates
-  );
-  if (deadlineClosedPick) {
-    return {
-      error: `${deadlineClosedPick}은 메뉴 선택 마감 이후라 선택할 수 없습니다`,
-    };
-  }
   return {};
 }
 
@@ -499,7 +559,7 @@ export async function bulkSaveDeliveryDays(
 
   const { data: subscription } = await supabase
     .from("subscriptions")
-    .select("frequency_per_week, total_delivery_days")
+    .select("frequency_per_week, total_delivery_days, salads_per_delivery")
     .eq("id", subscriptionId)
     .eq("user_id", user.id)
     .single();
@@ -572,6 +632,12 @@ export async function bulkSaveDeliveryDays(
     user.id,
     subscriptionId,
     newDates
+  );
+  await assignRandomMenusForClosedDates(
+    supabase,
+    user.id,
+    newDates,
+    subscription.salads_per_delivery ?? 1
   );
 
   updateTag("day-counts");

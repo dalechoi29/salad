@@ -1,5 +1,98 @@
 import { createAdminClient } from "@/lib/supabase/server";
 
+function vacationSkipReason(sourcePeriod: string | null): string {
+  const monthMatch = sourcePeriod?.match(/(\d+)월/);
+  return monthMatch ? `${monthMatch[1]}월 구독 연기` : "구독 연기";
+}
+
+/**
+ * Keep one pending vacation-skip credit for this source subscription.
+ * Uses the service-role client because users cannot INSERT compensation_credits (RLS).
+ * Days already consumed as later-month carryover or applied credits are excluded
+ * so chained postpones do not double-count.
+ */
+export async function syncVacationSkipCredit(
+  userId: string,
+  subscriptionId: string,
+  sourcePeriod: string | null
+): Promise<{ error?: string }> {
+  const admin = createAdminClient();
+
+  const { count, error: countError } = await admin
+    .from("skipped_delivery_days")
+    .select("id", { count: "exact", head: true })
+    .eq("subscription_id", subscriptionId)
+    .or("skip_reason.is.null,skip_reason.neq.reschedule");
+  if (countError) return { error: countError.message };
+
+  const totalSkipped = count ?? 0;
+
+  const [{ data: laterSubs }, { data: appliedCredits }, { data: pending }] =
+    await Promise.all([
+      admin
+        .from("subscriptions")
+        .select("carryover_delivery_days")
+        .eq("carryover_from_subscription_id", subscriptionId),
+      admin
+        .from("compensation_credits")
+        .select("days")
+        .eq("user_id", userId)
+        .eq("source_subscription_id", subscriptionId)
+        .not("applied_at", "is", null),
+      admin
+        .from("compensation_credits")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("source_subscription_id", subscriptionId)
+        .is("applied_at", null)
+        .maybeSingle(),
+    ]);
+
+  const consumedAsCarryover = (laterSubs ?? []).reduce(
+    (sum, row) => sum + ((row.carryover_delivery_days as number | null) ?? 0),
+    0
+  );
+  const appliedDays = (appliedCredits ?? []).reduce(
+    (sum, row) => sum + ((row.days as number | null) ?? 0),
+    0
+  );
+  const pendingDays = Math.max(
+    0,
+    totalSkipped - Math.max(consumedAsCarryover, appliedDays)
+  );
+  const reasonStr = vacationSkipReason(sourcePeriod);
+
+  if (pendingDays === 0) {
+    if (pending?.id) {
+      const { error } = await admin
+        .from("compensation_credits")
+        .delete()
+        .eq("id", pending.id);
+      if (error) return { error: error.message };
+    }
+    return {};
+  }
+
+  if (pending?.id) {
+    const { error } = await admin
+      .from("compensation_credits")
+      .update({ days: pendingDays, reason: reasonStr })
+      .eq("id", pending.id);
+    if (error) return { error: error.message };
+    return {};
+  }
+
+  const { error } = await admin.from("compensation_credits").insert({
+    user_id: userId,
+    days: pendingDays,
+    source_period: sourcePeriod,
+    source_subscription_id: subscriptionId,
+    reason: reasonStr,
+  });
+  if (error) return { error: error.message };
+  return {};
+}
+
 function formatClosureReasonLabel(closureDate: string): string {
   const [, month, day] = closureDate.split("-");
   const monthNum = parseInt(month, 10);
