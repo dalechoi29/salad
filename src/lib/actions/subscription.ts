@@ -42,6 +42,16 @@ function revalidateAfterDeliveryScheduleChange(userId?: string): void {
   if (userId) revalidatePath(`/admin/users/${userId}`);
 }
 
+/**
+ * User apply/pay must not call revalidatePath("/"). That invalidates the
+ * whole tree and Next waits to rebuild it before the button's server
+ * action returns — which is why 구독 신청 / 결제 완료 신청 felt like 5s+.
+ * Tagged caches (home day counts) still refresh; pages refetch on next visit.
+ */
+function revalidateAfterUserPlanWrite(): void {
+  updateTag("day-counts");
+}
+
 /** Raise stored paid days when selected dates minus carryover is higher. */
 async function raiseStoredPaidDaysToMatchSelection(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -720,6 +730,32 @@ export async function getMyCarryoverReplacement(
     .eq("period_id", periodId)
     .maybeSingle();
 
+  const storedDays = (existing?.carryover_delivery_days as number | null) ?? 0;
+  // Existing rows already have their allocation. Skip the all-history
+  // unresolved scan on payment/status refreshes — that scan was a large
+  // part of the post-submit wait.
+  if (existing && storedDays > 0) {
+    const creditRows = await fetchPendingCompensationCredits(
+      supabase,
+      user.id,
+      existing.id as string
+    );
+    const extraCreditDays = additionalCreditDaysForCarryover(
+      storedDays,
+      (existing.carryover_from_subscription_id as string | null) ?? "",
+      creditRows
+    );
+    return {
+      sourceSubscriptionId:
+        (existing.carryover_from_subscription_id as string | null) ?? "",
+      availableDays: storedDays + extraCreditDays,
+      targetMonth: "",
+      usedDates: [],
+      compensationCredits: creditRows,
+      compensationCreditIds: creditRows.map((r) => r.id),
+    };
+  }
+
   const [unresolved, creditRows] = await Promise.all([
     getUnresolvedCarryoverReplacement(
       supabase,
@@ -793,15 +829,11 @@ export async function createOrUpdateSubscription(
   compensationCreditDaysUsed = 0
 ): Promise<ActionResult & { subscriptionId?: string }> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  const { data: period } = await supabase
-    .from("subscription_periods")
-    .select("*")
-    .eq("id", periodId)
-    .single();
+  const period = await getSubscriptionPeriodById(periodId);
 
   if (!period) return { error: "Subscription period not found" };
 
@@ -818,9 +850,9 @@ export async function createOrUpdateSubscription(
   const { data: existing } = await supabase
     .from("subscriptions")
     .select("id, carryover_delivery_days, carryover_from_subscription_id")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("period_id", periodId)
-    .single();
+    .maybeSingle();
   const existingCarryover = existing as ExistingCarryoverSubscription | null;
 
   if (normalizedCarryoverDays > 0) {
@@ -836,7 +868,7 @@ export async function createOrUpdateSubscription(
     if (isCompensationOnly) {
       const pendingCredits = await fetchPendingCompensationCredits(
         supabase,
-        user.id,
+        userId,
         existingCarryover?.id
       );
       const totalCreditDays = pendingCredits.reduce(
@@ -858,13 +890,13 @@ export async function createOrUpdateSubscription(
         const [availableCarryover, pendingCredits] = await Promise.all([
           getUnresolvedCarryoverReplacement(
             supabase,
-            user.id,
+            userId,
             periodId,
             existingCarryover?.id
           ),
           fetchPendingCompensationCredits(
             supabase,
-            user.id,
+            userId,
             existingCarryover?.id
           ),
         ]);
@@ -927,31 +959,30 @@ export async function createOrUpdateSubscription(
         .from("subscriptions")
         .update({ closure_reselection_required: true })
         .eq("id", existingCarryover.carryover_from_subscription_id)
-        .eq("user_id", user.id);
+        .eq("user_id", userId);
     }
 
-    const creditIdsToReserve = await selectCompensationCreditIdsForDays(
-      user.id,
-      compensationCreditDaysUsed,
-      existing.id
-    );
-    await reserveCompensationCreditsForSubscription(
-      user.id,
-      existing.id,
-      creditIdsToReserve
-    );
+    if (compensationCreditDaysUsed > 0) {
+      await reserveCompensationCreditsForSubscription(
+        userId,
+        existing.id,
+        await selectCompensationCreditIdsForDays(
+          userId,
+          compensationCreditDaysUsed,
+          existing.id
+        )
+      );
+    } else {
+      await reserveCompensationCreditsForSubscription(userId, existing.id, []);
+    }
 
-    revalidatePath("/subscription");
-    revalidatePath("/delivery");
-    revalidatePath("/");
-    revalidatePath("/admin/subscription-status");
-    revalidatePath("/admin/compensation");
+    revalidateAfterUserPlanWrite();
     return { success: true, subscriptionId: existing.id };
   } else {
     const { data: inserted, error } = await supabase
       .from("subscriptions")
       .insert({
-        user_id: user.id,
+        user_id: userId,
         period_id: periodId,
         frequency_per_week: frequency,
         salads_per_delivery: saladsPerDelivery,
@@ -968,22 +999,19 @@ export async function createOrUpdateSubscription(
 
     if (error) return { error: error.message };
 
-    const creditIdsToReserve = await selectCompensationCreditIdsForDays(
-      user.id,
-      compensationCreditDaysUsed,
-      inserted.id
-    );
-    await reserveCompensationCreditsForSubscription(
-      user.id,
-      inserted.id,
-      creditIdsToReserve
-    );
+    if (compensationCreditDaysUsed > 0) {
+      await reserveCompensationCreditsForSubscription(
+        userId,
+        inserted.id,
+        await selectCompensationCreditIdsForDays(
+          userId,
+          compensationCreditDaysUsed,
+          inserted.id
+        )
+      );
+    }
 
-    revalidatePath("/subscription");
-    revalidatePath("/delivery");
-    revalidatePath("/");
-    revalidatePath("/admin/subscription-status");
-    revalidatePath("/admin/compensation");
+    revalidateAfterUserPlanWrite();
     return { success: true, subscriptionId: inserted.id };
   }
 }
@@ -1048,10 +1076,7 @@ export async function resolveCarryoverReplacement(
 
   if (error) return { error: error.message };
 
-  revalidatePath("/subscription");
-  revalidatePath("/delivery");
-  revalidatePath("/");
-  revalidatePath("/admin/subscription-status");
+  revalidateAfterUserPlanWrite();
   return { success: true };
 }
 
@@ -1119,7 +1144,8 @@ export async function applySubscriptionPlan(input: {
   if (hasDates) {
     const syncResult = await bulkSaveDeliveryDays(
       result.subscriptionId,
-      weeklySelections
+      weeklySelections,
+      { skipRevalidate: true }
     );
     if (syncResult.error) {
       return {
@@ -1151,46 +1177,57 @@ export async function updatePaymentAndMarkPaid(
   paymentMethod: PaymentMethod
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  // Local JWT validation — this hot path only needs the caller's id.
   const userId = await getAuthUserId();
 
   if (!userId) return { error: "AUTH_REQUIRED" };
 
-  await raiseStoredPaidDaysToMatchSelection(supabase, subscriptionId);
+  const [{ data: sub }, { data: rows }] = await Promise.all([
+    supabase
+      .from("subscriptions")
+      .select(
+        "total_delivery_days, carryover_delivery_days, payment_status, paid_at"
+      )
+      .eq("id", subscriptionId)
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("delivery_days")
+      .select("week_start, selected_days")
+      .eq("subscription_id", subscriptionId),
+  ]);
 
-  // Update and read back paid_at in one round trip; stamp paid_at afterwards
-  // only on the first pending → completed transition so re-marking an
-  // already-paid subscription preserves the original timestamp.
-  const { data: updated, error } = await supabase
+  if (!sub) return { error: "구독을 찾을 수 없어요." };
+
+  const updateData: Record<string, unknown> = {
+    payment_method: paymentMethod,
+    payment_status: "completed",
+  };
+  if (!sub.paid_at) {
+    updateData.paid_at = new Date().toISOString();
+  }
+
+  if ((sub.payment_status as string) !== "completed") {
+    const selectedCount = expandDeliveryDaysToDateStrings(rows ?? []).length;
+    if (selectedCount > 0) {
+      const correct = getPaidDeliveryDaysFromSelection(
+        selectedCount,
+        (sub.carryover_delivery_days as number | null) ?? 0
+      );
+      const stored = (sub.total_delivery_days as number | null) ?? 0;
+      if (correct > stored) updateData.total_delivery_days = correct;
+    }
+  }
+
+  const { error } = await supabase
     .from("subscriptions")
-    .update({
-      payment_method: paymentMethod,
-      payment_status: "completed",
-    })
+    .update(updateData)
     .eq("id", subscriptionId)
-    .eq("user_id", userId)
-    .select("paid_at")
-    .maybeSingle();
+    .eq("user_id", userId);
 
   if (error) return { error: error.message };
 
-  if (updated && !updated.paid_at) {
-    const { error: paidAtError } = await supabase
-      .from("subscriptions")
-      .update({ paid_at: new Date().toISOString() })
-      .eq("id", subscriptionId)
-      .eq("user_id", userId)
-      .is("paid_at", null);
-    if (paidAtError) return { error: paidAtError.message };
-  }
-
   await finalizeCompensationCreditsOnPayment(userId, subscriptionId);
-
-  revalidatePath("/subscription");
-  revalidatePath("/delivery");
-  revalidatePath("/");
-  revalidatePath("/admin/subscription-status");
-  revalidatePath("/admin/compensation");
+  revalidateAfterUserPlanWrite();
   return { success: true };
 }
 
@@ -1211,10 +1248,7 @@ export async function updatePaymentMethod(
 
   if (error) return { error: error.message };
 
-  revalidatePath("/subscription");
-  revalidatePath("/delivery");
-  revalidatePath("/");
-  revalidatePath("/admin/subscription-status");
+  revalidateAfterUserPlanWrite();
   return { success: true };
 }
 

@@ -1,12 +1,14 @@
 "use server";
 
-import { createClient, createAdminClient, getAuthUser } from "@/lib/supabase/server";
-import { revalidatePath, updateTag } from "next/cache";
+import { createClient, createAdminClient, createPublicClient, getAuthUser, getAuthUserId } from "@/lib/supabase/server";
+import { revalidatePath, updateTag, unstable_cache } from "next/cache";
 import type { ActionResult, DeliveryDay } from "@/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expandDeliveryDaysToDateStrings } from "@/lib/delivery-days";
 import { hasOpenSubscriptionHold } from "@/lib/subscription-hold-guard";
 import { formatDateISO, getKSTDate, isSelectionClosed } from "@/lib/utils";
+import { getHolidays } from "@/lib/actions/holiday";
+import { getStoreClosures } from "@/lib/actions/store-closure";
 
 // Remove any user_menu_selections whose delivery_date is no longer in the user's
 // saved delivery_days for this subscription. Without this, if a user moves their
@@ -59,31 +61,32 @@ function expandWeekSelectionToDateStrings(
 }
 
 async function getBlockedDateSet(
-  client: SupabaseClient,
+  _client: SupabaseClient,
   dates: string[]
 ): Promise<Set<string>> {
   if (dates.length === 0) return new Set();
-  const sorted = [...new Set(dates)].sort();
-  const start = sorted[0];
-  const end = sorted[sorted.length - 1];
-
-  const [{ data: holidays }, { data: closures }] = await Promise.all([
-    client
-      .from("holidays")
-      .select("holiday_date")
-      .gte("holiday_date", start)
-      .lte("holiday_date", end),
-    client
-      .from("store_closures")
-      .select("closure_date")
-      .gte("closure_date", start)
-      .lte("closure_date", end),
+  const years = [
+    ...new Set(dates.map((d) => parseInt(d.slice(0, 4), 10))),
+  ];
+  const [holidayLists, closureLists] = await Promise.all([
+    Promise.all(years.map((y) => getHolidays(y))),
+    Promise.all(years.map((y) => getStoreClosures(y))),
   ]);
-
-  return new Set([
-    ...((holidays ?? []) as any[]).map((h) => h.holiday_date as string),
-    ...((closures ?? []) as any[]).map((c) => c.closure_date as string),
-  ]);
+  const blocked = new Set<string>();
+  const dateSet = new Set(dates);
+  for (const list of holidayLists) {
+    for (const h of list) {
+      const day = h.holiday_date.slice(0, 10);
+      if (dateSet.has(day)) blocked.add(day);
+    }
+  }
+  for (const list of closureLists) {
+    for (const c of list) {
+      const day = c.closure_date.slice(0, 10);
+      if (dateSet.has(day)) blocked.add(day);
+    }
+  }
+  return blocked;
 }
 
 function getMondayISO(dateStr: string): string {
@@ -94,29 +97,51 @@ function getMondayISO(dateStr: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+const fetchMenuCutoffCached = unstable_cache(
+  async (): Promise<{ day: number; time: string }> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("admin_settings")
+      .select("key, value")
+      .in("key", ["menu_selection_cutoff_day", "menu_selection_cutoff_time"]);
+    const settings: Record<string, string> = {};
+    for (const row of data ?? []) settings[row.key] = row.value;
+    return {
+      day: parseInt(settings.menu_selection_cutoff_day ?? "4", 10),
+      time: settings.menu_selection_cutoff_time ?? "23:59",
+    };
+  },
+  ["menu-selection-cutoff"],
+  { revalidate: 600, tags: ["settings"] }
+);
+
+const fetchWeeklyDeadlinesCached = unstable_cache(
+  async (startDate: string, endDate: string): Promise<{ week_start: string; deadline_at: string }[]> => {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from("menu_selection_deadlines")
+      .select("week_start, deadline_at")
+      .gte("week_start", startDate)
+      .lte("week_start", endDate);
+    return data ?? [];
+  },
+  ["delivery-weekly-menu-deadlines"],
+  { revalidate: 600, tags: ["settings"] }
+);
+
 async function getClosedDeadlineDates(
-  client: SupabaseClient,
+  _client: SupabaseClient,
   dates: string[]
 ): Promise<string[]> {
   if (dates.length === 0) return [];
   const sorted = [...new Set(dates)].sort();
-  const weekStarts = [...new Set(sorted.map(getMondayISO))];
-  const [{ data: settingsRows }, { data: deadlineRows }] = await Promise.all([
-    client.from("admin_settings").select("key, value"),
-    client
-      .from("menu_selection_deadlines")
-      .select("week_start, deadline_at")
-      .in("week_start", weekStarts),
+  const weekStarts = [...new Set(sorted.map(getMondayISO))].sort();
+  const [{ day: cutoffDay, time: cutoffTime }, deadlineRows] = await Promise.all([
+    fetchMenuCutoffCached(),
+    fetchWeeklyDeadlinesCached(weekStarts[0], weekStarts[weekStarts.length - 1]),
   ]);
-  const settings: Record<string, string> = {};
-  for (const row of settingsRows ?? []) settings[row.key] = row.value;
-  const cutoffDay = parseInt(settings.menu_selection_cutoff_day ?? "4", 10);
-  const cutoffTime = settings.menu_selection_cutoff_time ?? "23:59";
   const overrideMap = new Map(
-    (deadlineRows ?? []).map((row: any) => [
-      row.week_start as string,
-      row.deadline_at as string,
-    ])
+    deadlineRows.map((row) => [row.week_start, row.deadline_at])
   );
 
   const closed: string[] = [];
@@ -523,8 +548,6 @@ export async function saveDeliveryDays(
 
   updateTag("day-counts");
   revalidatePath("/delivery");
-  revalidatePath("/");
-  revalidatePath("/admin/subscription-status");
   return { success: true };
 }
 
@@ -550,23 +573,27 @@ export async function validateDeliveryDateStringsForSubscription(
 
 export async function bulkSaveDeliveryDays(
   subscriptionId: string,
-  weeklySelections: { weekStart: string; selectedDays: number[] }[]
+  weeklySelections: { weekStart: string; selectedDays: number[] }[],
+  options?: { skipRevalidate?: boolean }
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const user = await getAuthUser();
+  const userId = await getAuthUserId();
 
-  if (!user) return { error: "AUTH_REQUIRED" };
+  if (!userId) return { error: "AUTH_REQUIRED" };
 
-  const { data: subscription } = await supabase
-    .from("subscriptions")
-    .select("frequency_per_week, total_delivery_days, salads_per_delivery")
-    .eq("id", subscriptionId)
-    .eq("user_id", user.id)
-    .single();
+  const [{ data: subscription }, holdOpen] = await Promise.all([
+    supabase
+      .from("subscriptions")
+      .select("frequency_per_week, total_delivery_days, salads_per_delivery")
+      .eq("id", subscriptionId)
+      .eq("user_id", userId)
+      .single(),
+    hasOpenSubscriptionHold(supabase, subscriptionId),
+  ]);
 
   if (!subscription) return { error: "Subscription not found" };
 
-  if (await hasOpenSubscriptionHold(supabase, subscriptionId)) {
+  if (holdOpen) {
     return {
       error:
         "배송·메뉴 홀드 중에는 여기서 배송일을 바꿀 수 없어요. 구독 화면에서 홀드를 취소한 뒤 수정해 주세요.",
@@ -602,7 +629,7 @@ export async function bulkSaveDeliveryDays(
   const { error: deleteError } = await supabase
     .from("delivery_days")
     .delete()
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("subscription_id", subscriptionId);
 
   if (deleteError) return { error: deleteError.message };
@@ -611,7 +638,7 @@ export async function bulkSaveDeliveryDays(
     const rows = weeklySelections
       .filter((w) => w.selectedDays.length > 0)
       .map((w) => ({
-        user_id: user.id,
+        user_id: userId,
         subscription_id: subscriptionId,
         week_start: w.weekStart,
         selected_days: w.selectedDays,
@@ -629,20 +656,20 @@ export async function bulkSaveDeliveryDays(
   const newDates = selectedDates;
   await cleanupStaleSelectionsForSubscription(
     supabase,
-    user.id,
+    userId,
     subscriptionId,
     newDates
   );
   await assignRandomMenusForClosedDates(
     supabase,
-    user.id,
+    userId,
     newDates,
     subscription.salads_per_delivery ?? 1
   );
 
-  updateTag("day-counts");
-  revalidatePath("/delivery");
-  revalidatePath("/");
-  revalidatePath("/admin/subscription-status");
+  if (!options?.skipRevalidate) {
+    updateTag("day-counts");
+    revalidatePath("/delivery");
+  }
   return { success: true };
 }

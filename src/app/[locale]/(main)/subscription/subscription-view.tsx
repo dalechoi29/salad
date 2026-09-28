@@ -2359,7 +2359,7 @@ function SubscriptionStatus({
                         )}
                         {method.value === "bank_transfer" && (
                           <p>
-                            국민은행, <span className="font-medium">9921-128-0262</span>(백충근)으로 이체해주세요.
+                            국민은행, <span className="font-medium">9921-128-0262</span>(백도현)으로 이체해주세요.
                           </p>
                         )}
                         {method.value === "credit_card" && (
